@@ -1,0 +1,20 @@
+{
+  "name": "scanfactory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generic, schema-driven platform for intelligent document processing",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace=packages/api",
+    "dev:web": "npm run dev --workspace=packages/web",
+    "build:api": "npm run build --workspace=packages/api",
+    "build:web": "npm run build --workspace=packages/web",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

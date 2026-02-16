@@ -1,0 +1,49 @@
+name = "scanfactory-api"
+main = "src/index.ts"
+compatibility_date = "2024-02-01"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "scanfactory-db"
+database_id = "local"
+
+# R2 Storage - Document Scans
+[[r2_buckets]]
+binding = "SCANS"
+bucket_name = "scanfactory-scans"
+
+# R2 Storage - Export Documents
+[[r2_buckets]]
+binding = "EXPORTS"
+bucket_name = "scanfactory-exports"
+
+# KV Namespace - Cache & Sessions
+[[kv_namespaces]]
+binding = "CACHE"
+id = "local"
+
+# Queue - Async Document Processing
+[[queues.producers]]
+binding = "DOC_QUEUE"
+queue = "scanfactory-doc-queue"
+
+[[queues.consumers]]
+queue = "scanfactory-doc-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+
+# Environment Variables
+[vars]
+OCR_API_URL = "https://ocr.devfactory.tn/api"
+
+# Secrets (set via wrangler secret put)
+# OCR_API_KEY
+# JWT_SECRET
+# TWILIO_ACCOUNT_SID
+# TWILIO_AUTH_TOKEN
+# TWILIO_PHONE_NUMBER
+
+[dev]
+port = 8787
+local_protocol = "http"
