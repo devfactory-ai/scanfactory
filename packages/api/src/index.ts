@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { corsMiddleware } from './middleware/cors';
 import { authRoutes } from './auth/routes';
+import { extractionRoutes } from './core/extraction/routes';
 import { errorHandler } from './lib/errors';
 
 // Type definitions for Cloudflare bindings
@@ -38,5 +39,16 @@ app.get('/api/health', (c) => {
 
 // Auth routes (public)
 app.route('/api/auth', authRoutes);
+
+// Document routes (protected)
+app.route('/api/documents', extractionRoutes);
+
+// Admin routes for pipelines list (from extractionRoutes)
+app.get('/api/admin/pipelines', async (c) => {
+  const pipelines = await c.env.DB.prepare(
+    'SELECT id, name, display_name, description FROM pipelines WHERE active = 1'
+  ).all();
+  return c.json({ pipelines: pipelines.results ?? [] });
+});
 
 export default app;
