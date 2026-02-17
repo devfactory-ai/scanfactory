@@ -3,6 +3,7 @@ import { corsMiddleware } from './middleware/cors';
 import { authRoutes } from './auth/routes';
 import { extractionRoutes } from './core/extraction/routes';
 import { validationRoutes } from './core/validation/routes';
+import { batchRoutes } from './core/batches/routes';
 import { errorHandler } from './lib/errors';
 import { handleQueueMessage, type MessageBatch } from './core/pipeline/consumer';
 import { handleScheduledBatchClosure } from './core/batches/cron';
@@ -48,6 +49,9 @@ app.route('/api/documents', extractionRoutes);
 
 // Validation routes (protected)
 app.route('/api/validation', validationRoutes);
+
+// Batch routes (protected, admin mutations)
+app.route('/api/batches', batchRoutes);
 
 // Admin routes for pipelines list (from extractionRoutes)
 app.get('/api/admin/pipelines', async (c) => {
