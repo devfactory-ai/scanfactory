@@ -4,6 +4,11 @@ import { authMiddleware } from '../../middleware/auth';
 import { getValidationQueue, getDocumentById, updateDocument } from './queue';
 import { logAudit } from '../../lib/audit';
 import { NotFoundError, ValidationError } from '../../lib/errors';
+import {
+  validatePagination,
+  validateNumericRange,
+  safeJsonParse,
+} from '../../middleware/validation';
 
 const validationRoutes = new Hono<{ Bindings: Env }>();
 
@@ -14,20 +19,36 @@ validationRoutes.use('*', authMiddleware);
 validationRoutes.get('/queue', async (c) => {
   const pipelineId = c.req.query('pipeline_id');
   const status = c.req.query('status');
-  const minConfidence = c.req.query('min_confidence');
-  const maxConfidence = c.req.query('max_confidence');
   const batchId = c.req.query('batch_id');
   const sortBy = c.req.query('sort_by') as 'created_at' | 'confidence_score' | undefined;
   const sortOrder = c.req.query('sort_order') as 'asc' | 'desc' | undefined;
-  const limit = parseInt(c.req.query('limit') ?? '50', 10);
-  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  // Validate pagination with limits
+  const { limit, offset } = validatePagination(
+    c.req.query('limit'),
+    c.req.query('offset')
+  );
+
+  // Validate confidence range (0-1)
+  const minConfidence = validateNumericRange(
+    c.req.query('min_confidence'),
+    0,
+    1,
+    'min_confidence'
+  );
+  const maxConfidence = validateNumericRange(
+    c.req.query('max_confidence'),
+    0,
+    1,
+    'max_confidence'
+  );
 
   const result = await getValidationQueue(c.env.DB, {
     filters: {
       pipeline_id: pipelineId,
       status,
-      min_confidence: minConfidence ? parseFloat(minConfidence) : undefined,
-      max_confidence: maxConfidence ? parseFloat(maxConfidence) : undefined,
+      min_confidence: minConfidence,
+      max_confidence: maxConfidence,
       batch_id: batchId,
     },
     sort_by: sortBy,
@@ -36,14 +57,14 @@ validationRoutes.get('/queue', async (c) => {
     offset,
   });
 
-  // Parse JSON fields for response
+  // Parse JSON fields for response (with safe parsing)
   const documents = result.documents.map((doc) => ({
     ...doc,
-    extracted_data: JSON.parse(doc.extracted_data),
-    computed_data: doc.computed_data ? JSON.parse(doc.computed_data) : null,
-    extraction_modes: doc.extraction_modes ? JSON.parse(doc.extraction_modes) : null,
-    anomalies: doc.anomalies ? JSON.parse(doc.anomalies) : null,
-    metadata: doc.metadata ? JSON.parse(doc.metadata) : null,
+    extracted_data: safeJsonParse(doc.extracted_data, {}),
+    computed_data: doc.computed_data ? safeJsonParse(doc.computed_data, null) : null,
+    extraction_modes: doc.extraction_modes ? safeJsonParse(doc.extraction_modes, null) : null,
+    anomalies: doc.anomalies ? safeJsonParse(doc.anomalies, null) : null,
+    metadata: doc.metadata ? safeJsonParse(doc.metadata, null) : null,
   }));
 
   return c.json({
@@ -140,13 +161,13 @@ validationRoutes.get('/:id', async (c) => {
   return c.json({
     document: {
       ...doc,
-      extracted_data: JSON.parse(doc.extracted_data),
-      computed_data: doc.computed_data ? JSON.parse(doc.computed_data) : null,
-      extraction_modes: doc.extraction_modes ? JSON.parse(doc.extraction_modes) : null,
-      anomalies: doc.anomalies ? JSON.parse(doc.anomalies) : null,
-      metadata: doc.metadata ? JSON.parse(doc.metadata) : null,
+      extracted_data: safeJsonParse(doc.extracted_data, {}),
+      computed_data: doc.computed_data ? safeJsonParse(doc.computed_data, null) : null,
+      extraction_modes: doc.extraction_modes ? safeJsonParse(doc.extraction_modes, null) : null,
+      anomalies: doc.anomalies ? safeJsonParse(doc.anomalies, null) : null,
+      metadata: doc.metadata ? safeJsonParse(doc.metadata, null) : null,
     },
-    field_display: pipeline?.field_display ? JSON.parse(pipeline.field_display) : null,
+    field_display: pipeline?.field_display ? safeJsonParse(pipeline.field_display, null) : null,
     scan_url: `/api/documents/${documentId}/scan`,
   });
 });
@@ -173,7 +194,7 @@ validationRoutes.put('/:id', async (c) => {
     throw new ValidationError('Document déjà exporté, modification impossible');
   }
 
-  const oldData = JSON.parse(doc.extracted_data);
+  const oldData = safeJsonParse(doc.extracted_data, {});
   const updates: Parameters<typeof updateDocument>[2] = {};
 
   // Apply corrections
@@ -212,9 +233,9 @@ validationRoutes.put('/:id', async (c) => {
   return c.json({
     document: updatedDoc ? {
       ...updatedDoc,
-      extracted_data: JSON.parse(updatedDoc.extracted_data),
-      computed_data: updatedDoc.computed_data ? JSON.parse(updatedDoc.computed_data) : null,
-      anomalies: updatedDoc.anomalies ? JSON.parse(updatedDoc.anomalies) : null,
+      extracted_data: safeJsonParse(updatedDoc.extracted_data, {}),
+      computed_data: updatedDoc.computed_data ? safeJsonParse(updatedDoc.computed_data, null) : null,
+      anomalies: updatedDoc.anomalies ? safeJsonParse(updatedDoc.anomalies, null) : null,
     } : null,
   });
 });

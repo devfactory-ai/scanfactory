@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import type { Env } from '../index';
+import { generateId } from './ulid';
 
 export class AppError extends Error {
   constructor(
@@ -48,28 +49,78 @@ export class ConflictError extends AppError {
   }
 }
 
-export function errorHandler(err: Error, c: Context<{ Bindings: Env }>) {
-  console.error('Error:', err);
+/**
+ * Standardized error response format
+ */
+interface ErrorResponse {
+  error: {
+    id: string;
+    code: string;
+    message: string;
+    request_id?: string;
+    stack?: string;
+  };
+}
 
-  if (err instanceof AppError) {
-    return c.json(
-      {
-        error: {
-          code: err.code,
-          message: err.message,
-        },
-      },
-      err.statusCode as 400 | 401 | 403 | 404 | 409
-    );
+export function errorHandler(err: Error, c: Context<{ Bindings: Env }>) {
+  // Get request ID from context if available
+  let requestId: string | undefined;
+  try {
+    requestId = c.get('requestId');
+  } catch {
+    // Context variable not set
   }
 
-  return c.json(
-    {
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Erreur interne du serveur',
-      },
-    },
-    500
+  // Generate unique error ID for tracking
+  const errorId = generateId('err');
+
+  // Determine if we should include stack trace (dev only)
+  const isDev = c.env.ENVIRONMENT !== 'production';
+
+  // Log error with full details
+  console.error(
+    JSON.stringify({
+      type: 'error',
+      timestamp: new Date().toISOString(),
+      error_id: errorId,
+      request_id: requestId,
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+      code: err instanceof AppError ? err.code : 'INTERNAL_ERROR',
+    })
   );
+
+  if (err instanceof AppError) {
+    const response: ErrorResponse = {
+      error: {
+        id: errorId,
+        code: err.code ?? 'APP_ERROR',
+        message: err.message,
+        request_id: requestId,
+      },
+    };
+
+    if (isDev && err.stack) {
+      response.error.stack = err.stack;
+    }
+
+    return c.json(response, err.statusCode as 400 | 401 | 403 | 404 | 409);
+  }
+
+  // Internal server error - don't expose details in production
+  const response: ErrorResponse = {
+    error: {
+      id: errorId,
+      code: 'INTERNAL_ERROR',
+      message: isDev ? err.message : 'Erreur interne du serveur',
+      request_id: requestId,
+    },
+  };
+
+  if (isDev && err.stack) {
+    response.error.stack = err.stack;
+  }
+
+  return c.json(response, 500);
 }

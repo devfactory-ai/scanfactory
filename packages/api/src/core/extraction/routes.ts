@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import type { Env } from '../../index';
 import { authMiddleware } from '../../middleware/auth';
+import { uploadRateLimit } from '../../middleware/rateLimit';
+import { validateFileUpload, createBodySizeLimit, LIMITS } from '../../middleware/validation';
 import { OCRAdapter } from './adapter';
 import { mapOCRToDocument, type Pipeline } from './mapper';
 import { generateId } from '../../lib/ulid';
@@ -28,6 +30,10 @@ const extractionRoutes = new Hono<{ Bindings: Env }>();
 // All routes require authentication
 extractionRoutes.use('*', authMiddleware);
 
+// Apply rate limiting and body size limit to upload endpoint
+extractionRoutes.use('/scan', uploadRateLimit);
+extractionRoutes.use('/scan', createBodySizeLimit(LIMITS.UPLOAD_SIZE_MAX));
+
 // POST /api/documents/scan
 extractionRoutes.post('/scan', async (c) => {
   const user = c.get('user');
@@ -35,12 +41,11 @@ extractionRoutes.post('/scan', async (c) => {
   const file = formData.get('file');
   const pipelineName = formData.get('pipeline');
 
-  if (!file || typeof file === 'string') {
-    throw new ValidationError('Fichier image requis');
-  }
+  // Validate file upload (size and type)
+  validateFileUpload(file);
 
   // file is a Blob-like object in Workers
-  const fileBlob = file as unknown as { arrayBuffer(): Promise<ArrayBuffer>; type: string; name?: string };
+  const fileBlob = file as unknown as { arrayBuffer(): Promise<ArrayBuffer>; type: string; name?: string; size: number };
 
   if (!pipelineName || typeof pipelineName !== 'string') {
     throw new ValidationError('Pipeline requis');
