@@ -11,6 +11,18 @@ interface StorageProvider {
 }
 
 /**
+ * Safe JSON parse with default value
+ */
+function safeJsonParse<T>(json: string, defaultValue: T): T {
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    console.error('Failed to parse JSON:', json.slice(0, 100));
+    return defaultValue;
+  }
+}
+
+/**
  * Local storage for scanned documents
  *
  * Handles offline persistence of scans pending upload.
@@ -79,7 +91,7 @@ export class ScanStorage {
 
     if (!data) return null;
 
-    return JSON.parse(data);
+    return safeJsonParse<PendingUpload | null>(data, null);
   }
 
   /**
@@ -91,7 +103,7 @@ export class ScanStorage {
 
     if (!listData) return [];
 
-    const ids: string[] = JSON.parse(listData);
+    const ids: string[] = safeJsonParse<string[]>(listData, []);
     const pendings: PendingUpload[] = [];
 
     for (const id of ids) {
@@ -184,7 +196,7 @@ export class ScanStorage {
 
     if (!listData) return 0;
 
-    const ids: string[] = JSON.parse(listData);
+    const ids: string[] = safeJsonParse<string[]>(listData, []);
     return ids.length;
   }
 
@@ -227,7 +239,7 @@ export class ScanStorage {
     const listKey = this.getListKey();
     const listData = await this.storage.getItem(listKey);
 
-    const ids: string[] = listData ? JSON.parse(listData) : [];
+    const ids: string[] = listData ? safeJsonParse<string[]>(listData, []) : [];
 
     if (!ids.includes(localId)) {
       ids.push(localId);
@@ -241,7 +253,7 @@ export class ScanStorage {
 
     if (!listData) return;
 
-    const ids: string[] = JSON.parse(listData);
+    const ids: string[] = safeJsonParse<string[]>(listData, []);
     const filtered = ids.filter((id) => id !== localId);
 
     await this.storage.setItem(listKey, JSON.stringify(filtered));

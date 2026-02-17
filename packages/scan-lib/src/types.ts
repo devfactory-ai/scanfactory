@@ -108,7 +108,7 @@ export interface BoundingBox {
 }
 
 export interface QualityIssue {
-  type: 'blur' | 'low_light' | 'glare' | 'motion' | 'occlusion';
+  type: 'blur' | 'low_light' | 'glare' | 'motion' | 'occlusion' | 'unknown';
   severity: 'low' | 'medium' | 'high';
   message: string;
 }

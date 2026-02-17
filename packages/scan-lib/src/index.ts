@@ -76,3 +76,46 @@ export { ScanStorage } from './storage/ScanStorage';
 
 // Utilities
 export { generateLocalId, createDefaultConfig } from './utils';
+
+// Configuration System
+export {
+  ConfigManager,
+  getConfigManager,
+  resetConfigManager,
+  initializeConfig,
+  type RuntimeConfig,
+  type FeatureFlags,
+  type DebugConfig,
+  useConfig,
+  useFeatureFlag,
+} from './config';
+
+// Plugin System
+export {
+  // Types
+  type Plugin,
+  type PluginMetadata,
+  type PluginContext,
+  type PluginType,
+  type ScanLibPlugin,
+  type OCRAdapterPlugin,
+  type OCRAdapterOptions,
+  type ImageProcessorPlugin,
+  type QualityValidatorPlugin,
+  type PostProcessorPlugin,
+  type FieldTransformerPlugin,
+
+  // Registry
+  PluginRegistry,
+  getPluginRegistry,
+  resetPluginRegistry,
+
+  // Executor
+  PluginExecutor,
+  getPluginExecutor,
+  createPluginExecutor,
+
+  // Built-in plugins
+  createDateFormatterPlugin,
+  createAmountNormalizerPlugin,
+} from './plugins';
