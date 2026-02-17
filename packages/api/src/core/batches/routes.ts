@@ -5,6 +5,7 @@ import { BatchService, type BatchStatus } from './lifecycle';
 import { generateBordereauExport } from '../../pipelines/bulletin_soin/export';
 import { logAudit } from '../../lib/audit';
 import { BadRequestError, NotFoundError } from '../../lib/errors';
+import { validatePagination } from '../../middleware/validation';
 
 const batchRoutes = new Hono<{ Bindings: Env }>();
 
@@ -19,8 +20,12 @@ batchRoutes.get('/', async (c) => {
 
   const pipelineId = c.req.query('pipeline_id');
   const status = c.req.query('status') as BatchStatus | undefined;
-  const limit = parseInt(c.req.query('limit') ?? '50', 10);
-  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  // Validate pagination with limits
+  const { limit, offset } = validatePagination(
+    c.req.query('limit'),
+    c.req.query('offset')
+  );
 
   const { batches, total } = await batchService.listBatches({
     pipeline_id: pipelineId,
@@ -39,52 +44,102 @@ batchRoutes.get('/', async (c) => {
 
 /**
  * GET /batches/:id - Get batch details with documents summary
+ * Optimized: Single query with LEFT JOIN and GROUP BY instead of correlated subqueries
  */
 batchRoutes.get('/:id', async (c) => {
   const batchId = c.req.param('id');
-  const batchService = new BatchService(c.env.DB);
 
-  const batch = await batchService.getBatch(batchId);
-  if (!batch) {
+  // Optimized query using LEFT JOIN + GROUP BY instead of 6 correlated subqueries
+  const result = await c.env.DB
+    .prepare(
+      `SELECT
+         b.id, b.pipeline_id, b.group_key, b.group_label, b.status,
+         b.document_count, b.export_r2_key, b.opened_at, b.closed_at,
+         b.exported_at, b.settled_at, b.settled_amount, b.created_at,
+         p.name as pipeline_name, p.display_name as pipeline_display_name,
+         COUNT(CASE WHEN d.status = 'pending' THEN 1 END) as pending_count,
+         COUNT(CASE WHEN d.status = 'validated' THEN 1 END) as validated_count,
+         COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) as rejected_count,
+         COUNT(CASE WHEN d.status = 'exported' THEN 1 END) as exported_count,
+         SUM(CASE WHEN d.status = 'validated'
+             THEN CAST(json_extract(d.extracted_data, '$.invoiced_amount') AS REAL)
+             ELSE 0 END) as total_invoiced,
+         SUM(CASE WHEN d.status = 'validated'
+             THEN CAST(json_extract(d.computed_data, '$.reimbursement_amount') AS REAL)
+             ELSE 0 END) as total_reimbursement
+       FROM batches b
+       JOIN pipelines p ON b.pipeline_id = p.id
+       LEFT JOIN documents d ON d.batch_id = b.id
+       WHERE b.id = ?
+       GROUP BY b.id`
+    )
+    .bind(batchId)
+    .first<{
+      id: string;
+      pipeline_id: string;
+      group_key: string;
+      group_label: string;
+      status: string;
+      document_count: number;
+      export_r2_key: string | null;
+      opened_at: string;
+      closed_at: string | null;
+      exported_at: string | null;
+      settled_at: string | null;
+      settled_amount: number | null;
+      created_at: string;
+      pipeline_name: string;
+      pipeline_display_name: string;
+      pending_count: number;
+      validated_count: number;
+      rejected_count: number;
+      exported_count: number;
+      total_invoiced: number | null;
+      total_reimbursement: number | null;
+    }>();
+
+  if (!result) {
     throw new NotFoundError(`Lot non trouvé: ${batchId}`);
   }
 
-  // Get document status breakdown
-  const statusCounts = await c.env.DB
-    .prepare(
-      `SELECT status, COUNT(*) as count
-       FROM documents
-       WHERE batch_id = ?
-       GROUP BY status`
-    )
-    .bind(batchId)
-    .all<{ status: string; count: number }>();
+  // Transform result into expected shape
+  const batch = {
+    id: result.id,
+    pipeline_id: result.pipeline_id,
+    group_key: result.group_key,
+    group_label: result.group_label,
+    status: result.status,
+    document_count: result.document_count,
+    export_r2_key: result.export_r2_key,
+    opened_at: result.opened_at,
+    closed_at: result.closed_at,
+    exported_at: result.exported_at,
+    settled_at: result.settled_at,
+    settled_amount: result.settled_amount,
+    created_at: result.created_at,
+  };
 
-  // Get pipeline info
-  const pipeline = await c.env.DB
-    .prepare('SELECT id, name, display_name FROM pipelines WHERE id = ?')
-    .bind(batch.pipeline_id)
-    .first<{ id: string; name: string; display_name: string }>();
+  const pipeline = {
+    id: result.pipeline_id,
+    name: result.pipeline_name,
+    display_name: result.pipeline_display_name,
+  };
 
-  // Get total amounts if available
-  const totals = await c.env.DB
-    .prepare(
-      `SELECT
-         SUM(json_extract(extracted_data, '$.invoiced_amount')) as total_invoiced,
-         SUM(json_extract(computed_data, '$.reimbursement_amount')) as total_reimbursement
-       FROM documents
-       WHERE batch_id = ? AND status = 'validated'`
-    )
-    .bind(batchId)
-    .first<{ total_invoiced: number | null; total_reimbursement: number | null }>();
+  // Build status breakdown array
+  const statusBreakdown = [
+    { status: 'pending', count: result.pending_count },
+    { status: 'validated', count: result.validated_count },
+    { status: 'rejected', count: result.rejected_count },
+    { status: 'exported', count: result.exported_count },
+  ].filter(s => s.count > 0);
 
   return c.json({
     batch,
     pipeline,
-    status_breakdown: statusCounts.results ?? [],
+    status_breakdown: statusBreakdown,
     totals: {
-      invoiced: totals?.total_invoiced ?? 0,
-      reimbursement: totals?.total_reimbursement ?? 0,
+      invoiced: result.total_invoiced ?? 0,
+      reimbursement: result.total_reimbursement ?? 0,
     },
   });
 });
@@ -185,13 +240,19 @@ batchRoutes.post('/:id/export', roleGuard('admin'), async (c) => {
 
 /**
  * GET /batches/:id/export/:type - Download export file
+ *
+ * Supported types:
+ * - html: HTML bordereau for printing (also accepts 'pdf' for backward compatibility)
+ * - csv: CSV data export for spreadsheet import
  */
 batchRoutes.get('/:id/export/:type', async (c) => {
   const batchId = c.req.param('id');
   const exportType = c.req.param('type');
 
-  if (!['pdf', 'csv'].includes(exportType)) {
-    throw new BadRequestError('Type export invalide (pdf ou csv)');
+  // Accept both 'html' and 'pdf' for HTML export (backward compatibility)
+  const validTypes = ['html', 'pdf', 'csv'];
+  if (!validTypes.includes(exportType)) {
+    throw new BadRequestError('Type export invalide (html, csv)');
   }
 
   const batchService = new BatchService(c.env.DB);
@@ -205,19 +266,21 @@ batchRoutes.get('/:id/export/:type', async (c) => {
     throw new BadRequestError('Ce lot n\'a pas encore été exporté');
   }
 
+  // Normalize export type: 'pdf' → 'html' for backward compatibility
+  const normalizedType = exportType === 'pdf' ? 'html' : exportType;
+
   // Find the export file
-  // The export_r2_key points to the PDF/HTML, CSV is in same directory
   const baseDir = batch.export_r2_key.substring(0, batch.export_r2_key.lastIndexOf('/') + 1);
 
   // List files in the export directory
   const listed = await c.env.EXPORTS.list({ prefix: baseDir });
   const files = listed.objects;
 
-  const targetExtension = exportType === 'pdf' ? '.html' : '.csv';
+  const targetExtension = normalizedType === 'html' ? '.html' : '.csv';
   const targetFile = files.find(f => f.key.endsWith(targetExtension));
 
   if (!targetFile) {
-    throw new NotFoundError(`Fichier ${exportType} non trouvé`);
+    throw new NotFoundError(`Fichier ${normalizedType} non trouvé`);
   }
 
   const file = await c.env.EXPORTS.get(targetFile.key);
@@ -225,11 +288,12 @@ batchRoutes.get('/:id/export/:type', async (c) => {
     throw new NotFoundError('Fichier non trouvé');
   }
 
-  const contentType = exportType === 'pdf'
+  // Set correct Content-Type based on actual file type
+  const contentType = normalizedType === 'html'
     ? 'text/html; charset=utf-8'
     : 'text/csv; charset=utf-8';
 
-  const filename = `bordereau_${batch.group_label.replace(/\s+/g, '_')}_${batchId.slice(-6)}.${exportType === 'pdf' ? 'html' : 'csv'}`;
+  const filename = `bordereau_${batch.group_label.replace(/\s+/g, '_')}_${batchId.slice(-6)}.${normalizedType}`;
 
   return new Response(file.body, {
     headers: {
@@ -264,8 +328,12 @@ batchRoutes.post('/:id/settle', roleGuard('admin'), async (c) => {
 batchRoutes.get('/:id/documents', async (c) => {
   const batchId = c.req.param('id');
   const status = c.req.query('status');
-  const limit = parseInt(c.req.query('limit') ?? '50', 10);
-  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  // Validate pagination with limits
+  const { limit, offset } = validatePagination(
+    c.req.query('limit'),
+    c.req.query('offset')
+  );
 
   const conditions = ['batch_id = ?'];
   const params: unknown[] = [batchId];

@@ -1,18 +1,35 @@
+import { lazy, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './hooks/useAuth';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
-import { Login } from './pages/Login';
-import { Scan } from './pages/Scan';
-import { ValidationQueue } from './pages/ValidationQueue';
-import { ValidationDetail } from './pages/ValidationDetail';
-import { ValidationBatch } from './pages/ValidationBatch';
+import { ErrorBoundary, PageErrorBoundary } from './components/ErrorBoundary';
+import { LoadingSpinner, PageLoadingSpinner } from './components/LoadingSpinner';
+
+// Lazy-loaded pages for code splitting
+const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
+const Scan = lazy(() => import('./pages/Scan').then(m => ({ default: m.Scan })));
+const ValidationQueue = lazy(() => import('./pages/ValidationQueue').then(m => ({ default: m.ValidationQueue })));
+const ValidationDetail = lazy(() => import('./pages/ValidationDetail').then(m => ({ default: m.ValidationDetail })));
+const ValidationBatch = lazy(() => import('./pages/ValidationBatch').then(m => ({ default: m.ValidationBatch })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60, // 1 minute
+      // Data considered fresh for 5 minutes (reduces unnecessary refetches)
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      // Keep unused data in cache for 24 hours (faster navigation)
+      gcTime: 24 * 60 * 60 * 1000, // 24 hours (formerly cacheTime)
+      // Don't refetch on window focus (explicit refresh preferred)
+      refetchOnWindowFocus: false,
+      // Retry failed requests once
+      retry: 1,
+      // Don't refetch on reconnect automatically
+      refetchOnReconnect: false,
+    },
+    mutations: {
+      // Retry mutations once on failure
       retry: 1,
     },
   },
@@ -30,72 +47,94 @@ function BatchesPage() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            {/* Public routes */}
-            <Route path="/login" element={<Login />} />
+    <PageErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <BrowserRouter>
+            <Suspense fallback={<PageLoadingSpinner />}>
+              <Routes>
+                {/* Public routes */}
+                <Route path="/login" element={<Login />} />
 
-            {/* Protected routes */}
-            <Route
-              path="/scan"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <Scan />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/validation"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <ValidationQueue />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/validation/:id"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <ValidationDetail />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/validation/batch"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <ValidationBatch />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/batches"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <BatchesPage />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
+                {/* Protected routes */}
+                <Route
+                  path="/scan"
+                  element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <Scan />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/validation"
+                  element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <ValidationQueue />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/validation/:id"
+                  element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <ValidationDetail />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/validation/batch"
+                  element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <ValidationBatch />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/batches"
+                  element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ErrorBoundary>
+                          <BatchesPage />
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
 
-            {/* Default redirect */}
-            <Route path="/" element={<Navigate to="/validation" replace />} />
-            <Route path="*" element={<Navigate to="/validation" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </QueryClientProvider>
+                {/* Default redirect */}
+                <Route path="/" element={<Navigate to="/validation" replace />} />
+                <Route path="*" element={<Navigate to="/validation" replace />} />
+              </Routes>
+            </Suspense>
+          </BrowserRouter>
+        </AuthProvider>
+      </QueryClientProvider>
+    </PageErrorBoundary>
   );
 }
 

@@ -1,4 +1,4 @@
-import type { Env } from '../../index';
+import { query, update } from '../../lib/queryBuilder';
 
 export interface DocumentWithPipeline {
   id: string;
@@ -37,73 +37,52 @@ export interface QueueOptions {
   offset?: number;
 }
 
+// Document columns for SELECT queries
+const DOCUMENT_COLUMNS = [
+  'd.id', 'd.pipeline_id', 'p.name as pipeline_name', 'p.display_name as pipeline_display_name',
+  'd.batch_id', 'd.scan_r2_key', 'd.status', 'd.extracted_data', 'd.computed_data',
+  'd.confidence_score', 'd.extraction_modes', 'd.anomalies', 'd.metadata',
+  'd.scanned_by', 'd.validated_by', 'd.validated_at', 'd.created_at', 'd.updated_at',
+];
+
 export async function getValidationQueue(
   db: D1Database,
   options: QueueOptions = {}
 ): Promise<{ documents: DocumentWithPipeline[]; total: number }> {
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  // Default to pending status
   const status = options.filters?.status ?? 'pending';
-  conditions.push('d.status = ?');
-  params.push(status);
-
-  if (options.filters?.pipeline_id) {
-    conditions.push('d.pipeline_id = ?');
-    params.push(options.filters.pipeline_id);
-  }
-
-  if (options.filters?.batch_id) {
-    conditions.push('d.batch_id = ?');
-    params.push(options.filters.batch_id);
-  }
-
-  if (options.filters?.min_confidence !== undefined) {
-    conditions.push('d.confidence_score >= ?');
-    params.push(options.filters.min_confidence);
-  }
-
-  if (options.filters?.max_confidence !== undefined) {
-    conditions.push('d.confidence_score <= ?');
-    params.push(options.filters.max_confidence);
-  }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-  // Sort: oldest first by default, or by confidence
   const sortBy = options.sort_by ?? 'created_at';
-  const sortOrder = options.sort_order ?? 'asc';
-  const orderClause = `ORDER BY d.${sortBy} ${sortOrder.toUpperCase()}`;
-
+  const sortOrder = (options.sort_order ?? 'asc').toUpperCase() as 'ASC' | 'DESC';
   const limit = options.limit ?? 50;
   const offset = options.offset ?? 0;
 
+  // Build base query with filters
+  const baseQuery = query()
+    .from('documents', 'd')
+    .join('pipelines', 'p', 'd.pipeline_id = p.id')
+    .where('d.status = ?', status)
+    .whereIf(!!options.filters?.pipeline_id, 'd.pipeline_id = ?', options.filters?.pipeline_id)
+    .whereIf(!!options.filters?.batch_id, 'd.batch_id = ?', options.filters?.batch_id)
+    .whereIf(options.filters?.min_confidence !== undefined, 'd.confidence_score >= ?', options.filters?.min_confidence)
+    .whereIf(options.filters?.max_confidence !== undefined, 'd.confidence_score <= ?', options.filters?.max_confidence);
+
   // Get total count
+  const countQuery = baseQuery.clone().buildCount();
   const countResult = await db
-    .prepare(
-      `SELECT COUNT(*) as count FROM documents d ${whereClause}`
-    )
-    .bind(...params)
+    .prepare(countQuery.sql)
+    .bind(...countQuery.params)
     .first<{ count: number }>();
 
-  // Get documents with pipeline info
-  const query = `
-    SELECT
-      d.id, d.pipeline_id, p.name as pipeline_name, p.display_name as pipeline_display_name,
-      d.batch_id, d.scan_r2_key, d.status, d.extracted_data, d.computed_data,
-      d.confidence_score, d.extraction_modes, d.anomalies, d.metadata,
-      d.scanned_by, d.validated_by, d.validated_at, d.created_at, d.updated_at
-    FROM documents d
-    JOIN pipelines p ON d.pipeline_id = p.id
-    ${whereClause}
-    ${orderClause}
-    LIMIT ? OFFSET ?
-  `;
+  // Get documents with pagination
+  const selectQuery = baseQuery
+    .select(...DOCUMENT_COLUMNS)
+    .orderBy(`d.${sortBy}`, sortOrder)
+    .limit(limit)
+    .offset(offset)
+    .buildSelect();
 
   const result = await db
-    .prepare(query)
-    .bind(...params, limit, offset)
+    .prepare(selectQuery.sql)
+    .bind(...selectQuery.params)
     .all<DocumentWithPipeline>();
 
   return {
@@ -141,42 +120,20 @@ export async function updateDocument(
     validated_by?: string;
   }
 ): Promise<void> {
-  const setClauses: string[] = ['updated_at = datetime(\'now\')'];
-  const params: unknown[] = [];
+  const builder = update('documents')
+    .setRaw("updated_at = datetime('now')")
+    .setIf(updates.extracted_data !== undefined, 'extracted_data', JSON.stringify(updates.extracted_data))
+    .setIf(updates.computed_data !== undefined, 'computed_data', JSON.stringify(updates.computed_data))
+    .setIf(updates.anomalies !== undefined, 'anomalies', JSON.stringify(updates.anomalies))
+    .setIf(updates.status !== undefined, 'status', updates.status)
+    .setIf(updates.validated_by !== undefined, 'validated_by', updates.validated_by)
+    .where('id = ?', documentId);
 
-  if (updates.extracted_data !== undefined) {
-    setClauses.push('extracted_data = ?');
-    params.push(JSON.stringify(updates.extracted_data));
+  // Add validated_at timestamp when status changes to validated or rejected
+  if (updates.status === 'validated' || updates.status === 'rejected') {
+    builder.setRaw("validated_at = datetime('now')");
   }
 
-  if (updates.computed_data !== undefined) {
-    setClauses.push('computed_data = ?');
-    params.push(JSON.stringify(updates.computed_data));
-  }
-
-  if (updates.anomalies !== undefined) {
-    setClauses.push('anomalies = ?');
-    params.push(JSON.stringify(updates.anomalies));
-  }
-
-  if (updates.status !== undefined) {
-    setClauses.push('status = ?');
-    params.push(updates.status);
-
-    if (updates.status === 'validated' || updates.status === 'rejected') {
-      setClauses.push('validated_at = datetime(\'now\')');
-    }
-  }
-
-  if (updates.validated_by !== undefined) {
-    setClauses.push('validated_by = ?');
-    params.push(updates.validated_by);
-  }
-
-  params.push(documentId);
-
-  await db
-    .prepare(`UPDATE documents SET ${setClauses.join(', ')} WHERE id = ?`)
-    .bind(...params)
-    .run();
+  const { sql, params } = builder.build();
+  await db.prepare(sql).bind(...params).run();
 }

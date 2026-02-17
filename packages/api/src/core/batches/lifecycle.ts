@@ -212,6 +212,7 @@ export class BatchService {
 
   /**
    * Mark batch as exported
+   * Uses db.batch() for atomic transaction - both updates succeed or both fail
    */
   async exportBatch(
     batchId: string,
@@ -225,22 +226,21 @@ export class BatchService {
 
     this.validateTransition(batch.status, 'exported');
 
-    await this.db
-      .prepare(
-        `UPDATE batches
-         SET status = 'exported', export_r2_key = ?, exported_at = datetime('now')
-         WHERE id = ?`
-      )
-      .bind(exportR2Key, batchId)
-      .run();
-
-    // Mark all documents as exported
-    await this.db
-      .prepare(
-        `UPDATE documents SET status = 'exported' WHERE batch_id = ? AND status = 'validated'`
-      )
-      .bind(batchId)
-      .run();
+    // Execute both updates atomically using D1 batch
+    await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE batches
+           SET status = 'exported', export_r2_key = ?, exported_at = datetime('now')
+           WHERE id = ?`
+        )
+        .bind(exportR2Key, batchId),
+      this.db
+        .prepare(
+          `UPDATE documents SET status = 'exported' WHERE batch_id = ? AND status = 'validated'`
+        )
+        .bind(batchId),
+    ]);
 
     if (userId) {
       await logAudit(this.db, {

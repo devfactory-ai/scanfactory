@@ -6,24 +6,35 @@ interface ApiError {
 }
 
 class ApiClient {
-  private token: string | null = null;
+  private csrfToken: string | null = null;
 
-  constructor() {
-    // Load token from localStorage on init
-    this.token = localStorage.getItem('token');
-  }
-
-  setToken(token: string | null) {
-    this.token = token;
-    if (token) {
-      localStorage.setItem('token', token);
-    } else {
-      localStorage.removeItem('token');
+  /**
+   * Fetch CSRF token from server (needed for state-changing requests)
+   */
+  async fetchCsrfToken(): Promise<string> {
+    if (this.csrfToken) {
+      return this.csrfToken;
     }
+
+    const response = await fetch(`${API_BASE}/csrf-token`, {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch CSRF token');
+    }
+
+    const data = await response.json() as { csrfToken: string };
+    this.csrfToken = data.csrfToken;
+    return this.csrfToken;
   }
 
-  getToken(): string | null {
-    return this.token;
+  /**
+   * Clear CSRF token (should be called after state-changing requests
+   * since token is rotated server-side)
+   */
+  clearCsrfToken(): void {
+    this.csrfToken = null;
   }
 
   private async request<T>(
@@ -39,15 +50,25 @@ class ApiClient {
       (headers as Record<string, string>)['Content-Type'] = 'application/json';
     }
 
-    // Add auth token if available
-    if (this.token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${this.token}`;
+    // Add CSRF token for state-changing requests (POST, PUT, DELETE, PATCH)
+    const method = options.method?.toUpperCase() ?? 'GET';
+    const needsCsrf = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method);
+
+    if (needsCsrf) {
+      const csrfToken = await this.fetchCsrfToken();
+      (headers as Record<string, string>)['X-CSRF-Token'] = csrfToken;
     }
 
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers,
+      credentials: 'include', // Send cookies with requests
     });
+
+    // Clear CSRF token after state-changing request (server rotates it)
+    if (needsCsrf) {
+      this.clearCsrfToken();
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({})) as { error?: ApiError };
@@ -65,7 +86,6 @@ class ApiClient {
   // Auth endpoints
   async login(email: string, password: string) {
     const result = await this.request<{
-      token: string;
       user: {
         id: string;
         email: string;
@@ -76,16 +96,11 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    this.setToken(result.token);
     return result;
   }
 
   async logout() {
-    try {
-      await this.request('/auth/logout', { method: 'POST' });
-    } finally {
-      this.setToken(null);
-    }
+    await this.request('/auth/logout', { method: 'POST' });
   }
 
   async getMe() {
@@ -101,7 +116,6 @@ class ApiClient {
 
   async refreshToken() {
     const result = await this.request<{
-      token: string;
       user: {
         id: string;
         email: string;
@@ -109,7 +123,6 @@ class ApiClient {
         role: 'admin' | 'operator' | 'consultant';
       };
     }>('/auth/refresh', { method: 'POST' });
-    this.setToken(result.token);
     return result;
   }
 

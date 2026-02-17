@@ -23,20 +23,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   // Check if user is already logged in on mount
+  // With httpOnly cookies, we can't check the token directly
+  // Instead, we call /auth/me and let the server validate the cookie
   useEffect(() => {
     const checkAuth = async () => {
-      const token = api.getToken();
-      if (!token) {
-        setIsLoading(false);
-        return;
-      }
-
       try {
         const { user: userData } = await api.getMe();
         setUser(userData);
       } catch {
-        // Token invalid or expired
-        api.setToken(null);
+        // Token invalid, expired, or not present
+        // Cookie is httpOnly so we can't clear it client-side
+        // The server will handle it
       } finally {
         setIsLoading(false);
       }

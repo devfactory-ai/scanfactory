@@ -1,11 +1,43 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+
+// Types for cache management
+interface DocumentResponse {
+  document: {
+    id: string;
+    pipeline_id: string;
+    pipeline_name: string;
+    pipeline_display_name: string;
+    batch_id: string | null;
+    status: string;
+    extracted_data: Record<string, unknown>;
+    computed_data: Record<string, unknown> | null;
+    confidence_score: number | null;
+    extraction_modes: { replace: string[]; table: string[]; direct: string[] } | null;
+    anomalies: Array<{ type: string; message: string; severity: string }> | null;
+    created_at: string;
+    updated_at: string;
+  };
+  field_display: {
+    groups: Array<{
+      name: string;
+      label: string;
+      fields: string[];
+    }>;
+  } | null;
+  scan_url: string;
+}
 import { ScanViewer } from '../components/ScanViewer';
 import { DocumentForm } from '../components/DocumentForm';
 import { ConfidenceBadge } from '../components/ConfidenceBadge';
-import { useKeyboardNavigation, KEYBOARD_SHORTCUTS } from '../hooks/useKeyboard';
+import { StatusBadge } from '../components/StatusBadge';
+import { AnomaliesAlert } from '../components/AnomaliesAlert';
+import { DocumentNavigator } from '../components/DocumentNavigator';
+import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
+import { ErrorAlert } from '../components/ErrorAlert';
+import { useKeyboardNavigation } from '../hooks/useKeyboard';
 
 export function ValidationDetail() {
   const { id } = useParams<{ id: string }>();
@@ -29,7 +61,25 @@ export function ValidationDetail() {
     enabled: !!id && !!data?.document.pipeline_id,
   });
 
-  // Validate mutation
+  // Prefetch adjacent documents for faster navigation
+  useEffect(() => {
+    if (adjacentData?.previous) {
+      queryClient.prefetchQuery({
+        queryKey: ['document', adjacentData.previous],
+        queryFn: () => api.getDocument(adjacentData.previous!),
+        staleTime: 5 * 60 * 1000, // 5 minutes
+      });
+    }
+    if (adjacentData?.next) {
+      queryClient.prefetchQuery({
+        queryKey: ['document', adjacentData.next],
+        queryFn: () => api.getDocument(adjacentData.next!),
+        staleTime: 5 * 60 * 1000,
+      });
+    }
+  }, [adjacentData?.previous, adjacentData?.next, queryClient]);
+
+  // Validate mutation with optimistic updates
   const validateMutation = useMutation({
     mutationFn: async (action: 'validate' | 'reject') => {
       return api.updateDocument(id!, {
@@ -37,8 +87,41 @@ export function ValidationDetail() {
         action,
       });
     },
-    onSuccess: () => {
+    // Optimistic update: immediately update cache before server responds
+    onMutate: async (action) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['document', id] });
+      await queryClient.cancelQueries({ queryKey: ['validationQueue'] });
+
+      // Snapshot previous value
+      const previousDocument = queryClient.getQueryData<DocumentResponse>(['document', id]);
+
+      // Optimistically update the document status
+      if (previousDocument) {
+        const newStatus = action === 'validate' ? 'validated' : 'rejected';
+        queryClient.setQueryData<DocumentResponse>(['document', id], {
+          ...previousDocument,
+          document: {
+            ...previousDocument.document,
+            status: newStatus,
+            extracted_data: editedData ?? previousDocument.document.extracted_data,
+          },
+        });
+      }
+
+      return { previousDocument };
+    },
+    // Rollback on error
+    onError: (_err, _action, context) => {
+      if (context?.previousDocument) {
+        queryClient.setQueryData(['document', id], context.previousDocument);
+      }
+    },
+    // Refetch on success or error
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['validationQueue'] });
+    },
+    onSuccess: () => {
       // Navigate to next document if available, otherwise go back to queue
       if (adjacentData?.next) {
         navigate(`/validation/${adjacentData.next}`);
@@ -101,9 +184,12 @@ export function ValidationDetail() {
 
   if (error || !data) {
     return (
-      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-        Erreur lors du chargement du document
-      </div>
+      <ErrorAlert
+        error={error}
+        title="Erreur de chargement"
+        context="fetch"
+        onRetry={() => window.location.reload()}
+      />
     );
   }
 
@@ -113,126 +199,52 @@ export function ValidationDetail() {
   return (
     <div className="h-[calc(100vh-12rem)]">
       {/* Keyboard shortcuts modal */}
-      {showShortcuts && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowShortcuts(false)}>
-          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Raccourcis clavier</h3>
-              <button onClick={() => setShowShortcuts(false)} className="text-gray-400 hover:text-gray-600">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Navigation</h4>
-                <div className="space-y-1">
-                  {KEYBOARD_SHORTCUTS.navigation.map((shortcut) => (
-                    <div key={shortcut.key} className="flex items-center justify-between text-sm">
-                      <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono">{shortcut.key}</kbd>
-                      <span className="text-gray-600">{shortcut.description}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Actions</h4>
-                <div className="space-y-1">
-                  {KEYBOARD_SHORTCUTS.actions.map((shortcut) => (
-                    <div key={shortcut.key} className="flex items-center justify-between text-sm">
-                      <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono">{shortcut.key}</kbd>
-                      <span className="text-gray-600">{shortcut.description}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Vue</h4>
-                <div className="space-y-1">
-                  {KEYBOARD_SHORTCUTS.view.map((shortcut) => (
-                    <div key={shortcut.key} className="flex items-center justify-between text-sm">
-                      <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono">{shortcut.key}</kbd>
-                      <span className="text-gray-600">{shortcut.description}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <KeyboardShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
 
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-4">
           <button
             onClick={() => navigate('/validation')}
-            className="text-gray-600 hover:text-gray-900"
+            className="text-gray-600 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 rounded"
+            aria-label="Retour à la liste de validation"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
           </button>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">
-              Validation de document
-            </h1>
+            <h1 className="text-xl font-bold text-gray-900">Validation de document</h1>
             <p className="text-sm text-gray-500">
               {doc.pipeline_display_name} | {doc.id.substring(0, 20)}...
             </p>
           </div>
         </div>
         <div className="flex items-center space-x-4">
-          {/* Navigation arrows */}
           {adjacentData && (
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handlePrevious}
-                disabled={!adjacentData.previous}
-                className="p-1 text-gray-500 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed"
-                title="Document précédent (←)"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <span className="text-sm text-gray-600">
-                {adjacentData.position} / {adjacentData.total}
-              </span>
-              <button
-                onClick={handleNext}
-                disabled={!adjacentData.next}
-                className="p-1 text-gray-500 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed"
-                title="Document suivant (→)"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-            </div>
+            <DocumentNavigator
+              previous={adjacentData.previous}
+              next={adjacentData.next}
+              position={adjacentData.position}
+              total={adjacentData.total}
+              onPrevious={handlePrevious}
+              onNext={handleNext}
+            />
           )}
           <div className="flex items-center space-x-2">
             <span className="text-sm text-gray-600">Confiance:</span>
             <ConfidenceBadge confidence={doc.confidence_score} />
           </div>
-          <span className={`
-            inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-            ${doc.status === 'pending' ? 'bg-yellow-100 text-yellow-800' : ''}
-            ${doc.status === 'validated' ? 'bg-green-100 text-green-800' : ''}
-            ${doc.status === 'rejected' ? 'bg-red-100 text-red-800' : ''}
-          `}>
-            {doc.status === 'pending' && 'En attente'}
-            {doc.status === 'validated' && 'Validé'}
-            {doc.status === 'rejected' && 'Rejeté'}
-          </span>
-          {/* Keyboard shortcuts help */}
+          <StatusBadge status={doc.status} />
           <button
             onClick={() => setShowShortcuts(!showShortcuts)}
-            className="p-1 text-gray-400 hover:text-gray-600"
+            className="p-1 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500 rounded"
             title="Raccourcis clavier"
+            aria-label="Afficher les raccourcis clavier"
+            aria-expanded={showShortcuts}
+            aria-haspopup="dialog"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
@@ -240,25 +252,7 @@ export function ValidationDetail() {
       </div>
 
       {/* Anomalies warning */}
-      {doc.anomalies && doc.anomalies.length > 0 && (
-        <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-yellow-800 mb-2">
-            Anomalies détectées
-          </h3>
-          <ul className="text-sm text-yellow-700 space-y-1">
-            {doc.anomalies.map((anomaly, index) => (
-              <li key={index} className="flex items-start">
-                <svg className="w-4 h-4 mr-2 mt-0.5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-                <span>
-                  <span className="font-medium">{anomaly.type}:</span> {anomaly.message}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <AnomaliesAlert anomalies={doc.anomalies} />
 
       {/* Split view */}
       <div className="flex h-full gap-4">
@@ -280,18 +274,20 @@ export function ValidationDetail() {
 
           {/* Action buttons */}
           {isEditable && (
-            <div className="border-t p-4 flex justify-end space-x-3">
+            <div className="border-t p-4 flex justify-end space-x-3" role="group" aria-label="Actions de validation">
               <button
                 onClick={() => validateMutation.mutate('reject')}
                 disabled={validateMutation.isPending}
-                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-100 rounded-md hover:bg-red-200 disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-100 rounded-md hover:bg-red-200 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                aria-busy={validateMutation.isPending}
               >
                 Rejeter
               </button>
               <button
                 onClick={() => validateMutation.mutate('validate')}
                 disabled={validateMutation.isPending}
-                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                aria-busy={validateMutation.isPending}
               >
                 {validateMutation.isPending ? 'Validation...' : 'Valider'}
               </button>
