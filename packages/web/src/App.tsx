@@ -5,6 +5,8 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Scan } from './pages/Scan';
+import { ValidationQueue } from './pages/ValidationQueue';
+import { ValidationDetail } from './pages/ValidationDetail';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -15,21 +17,12 @@ const queryClient = new QueryClient({
   },
 });
 
-// Placeholder pages until we implement them
-function ValidationQueuePage() {
-  return (
-    <div className="text-center py-12">
-      <h1 className="text-2xl font-bold text-gray-900">Validation</h1>
-      <p className="text-gray-600 mt-2">File d'attente de validation (à implémenter)</p>
-    </div>
-  );
-}
-
+// Placeholder page
 function BatchesPage() {
   return (
     <div className="text-center py-12">
       <h1 className="text-2xl font-bold text-gray-900">Lots</h1>
-      <p className="text-gray-600 mt-2">Gestion des lots (à implémenter)</p>
+      <p className="text-gray-600 mt-2">Gestion des lots (Phase 2)</p>
     </div>
   );
 }
@@ -59,7 +52,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Layout>
-                    <ValidationQueuePage />
+                    <ValidationQueue />
                   </Layout>
                 </ProtectedRoute>
               }
@@ -69,7 +62,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Layout>
-                    <div>Validation Detail (à implémenter)</div>
+                    <ValidationDetail />
                   </Layout>
                 </ProtectedRoute>
               }
