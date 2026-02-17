@@ -1,60 +1,52 @@
+import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, SafeAreaView } from 'react-native';
+import { StyleSheet, View, ActivityIndicator } from 'react-native';
+import { ScanScreen } from './src/screens/ScanScreen';
+import { api } from './src/lib/api';
 
 /**
  * ScanFactory Mobile App
  *
- * Minimal setup for document scanning workflow:
+ * Document scanning workflow:
  * - Document scanner with camera
  * - Pipeline type selection
  * - Scan history with offline support
  * - OTP authentication
  */
 export default function App() {
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    // Initialize API client (load stored token)
+    api.init().then(() => {
+      setIsReady(true);
+    });
+  }, []);
+
+  if (!isReady) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color="#1e40af" />
+        <StatusBar style="auto" />
+      </View>
+    );
+  }
+
+  // For now, show the scan screen directly
+  // TODO: Add navigation between Login, Scan, and History screens
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>ScanFactory</Text>
-        <Text style={styles.subtitle}>Scanner de documents</Text>
-      </View>
-      <View style={styles.content}>
-        <Text style={styles.placeholder}>Application en cours de configuration...</Text>
-      </View>
-      <StatusBar style="auto" />
-    </SafeAreaView>
+    <>
+      <ScanScreen />
+      <StatusBar style="light" />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  loading: {
     flex: 1,
     backgroundColor: '#f8fafc',
-  },
-  header: {
-    paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-    backgroundColor: '#1e40af',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#93c5fd',
-    marginTop: 4,
-  },
-  content: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  placeholder: {
-    fontSize: 16,
-    color: '#64748b',
-    textAlign: 'center',
   },
 });
