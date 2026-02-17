@@ -4,6 +4,8 @@ import { generateId } from '../lib/ulid';
 
 const OTP_EXPIRY_SECONDS = 300; // 5 minutes
 const OTP_LENGTH = 6;
+const OTP_REQUEST_LIMIT = 3; // Max OTP requests per hour
+const OTP_REQUEST_WINDOW_SECONDS = 3600; // 1 hour
 
 interface OTPData {
   code: string;
@@ -12,16 +14,60 @@ interface OTPData {
   attempts: number;
 }
 
+interface OTPRateLimitData {
+  count: number;
+  window_start: number;
+}
+
 /**
- * Generate a random OTP code
+ * Generate a cryptographically secure OTP code
+ * Uses crypto.getRandomValues() instead of Math.random()
  */
 function generateOTP(): string {
-  const digits = '0123456789';
-  let otp = '';
-  for (let i = 0; i < OTP_LENGTH; i++) {
-    otp += digits[Math.floor(Math.random() * digits.length)];
+  const randomBytes = crypto.getRandomValues(new Uint8Array(OTP_LENGTH));
+  return Array.from(randomBytes).map(b => String(b % 10)).join('');
+}
+
+/**
+ * Check and update OTP request rate limit
+ * Returns true if request is allowed, false if rate limited
+ */
+async function checkOTPRateLimit(
+  cache: KVNamespace,
+  phone: string
+): Promise<{ allowed: boolean; remaining: number; resetIn: number }> {
+  const key = `otp_rate:${phone}`;
+  const now = Date.now();
+
+  const dataJson = await cache.get(key);
+  let data: OTPRateLimitData;
+
+  if (dataJson) {
+    data = JSON.parse(dataJson) as OTPRateLimitData;
+
+    // Check if window has expired
+    if (now - data.window_start > OTP_REQUEST_WINDOW_SECONDS * 1000) {
+      // Reset window
+      data = { count: 0, window_start: now };
+    }
+  } else {
+    data = { count: 0, window_start: now };
   }
-  return otp;
+
+  const remaining = OTP_REQUEST_LIMIT - data.count;
+  const resetIn = Math.max(0, OTP_REQUEST_WINDOW_SECONDS - Math.floor((now - data.window_start) / 1000));
+
+  if (data.count >= OTP_REQUEST_LIMIT) {
+    return { allowed: false, remaining: 0, resetIn };
+  }
+
+  // Increment count
+  data.count++;
+  await cache.put(key, JSON.stringify(data), {
+    expirationTtl: OTP_REQUEST_WINDOW_SECONDS,
+  });
+
+  return { allowed: true, remaining: remaining - 1, resetIn };
 }
 
 /**
@@ -60,7 +106,8 @@ async function sendSMS(
 
   // Stub if Twilio is not configured
   if (!accountSid || !authToken || !fromNumber) {
-    console.log(`[OTP STUB] Sending code ${code} to ${to}`);
+    // Mask OTP code in logs - only show last 2 digits
+    console.log(`[OTP STUB] Sending code ****${code.slice(-2)} to ${to}`);
     return { success: true, message: 'Mode test: code affiché dans les logs' };
   }
 
@@ -102,7 +149,7 @@ async function sendSMS(
 export async function requestOTP(
   env: Env,
   phone: string
-): Promise<{ success: boolean; message: string }> {
+): Promise<{ success: boolean; message: string; retryAfter?: number }> {
   const normalizedPhone = normalizePhone(phone);
 
   // Validate phone format
@@ -110,7 +157,17 @@ export async function requestOTP(
     return { success: false, message: 'Numéro de téléphone invalide' };
   }
 
-  // Generate OTP
+  // Check rate limit
+  const rateLimit = await checkOTPRateLimit(env.CACHE, normalizedPhone);
+  if (!rateLimit.allowed) {
+    return {
+      success: false,
+      message: `Trop de demandes. Réessayez dans ${Math.ceil(rateLimit.resetIn / 60)} minutes`,
+      retryAfter: rateLimit.resetIn,
+    };
+  }
+
+  // Generate OTP (cryptographically secure)
   const code = generateOTP();
   const otpData: OTPData = {
     code,
