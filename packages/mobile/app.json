@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "ScanFactory",
+    "slug": "scanfactory",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1e40af"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "tn.devfactory.scanfactory",
+      "infoPlist": {
+        "NSCameraUsageDescription": "ScanFactory utilise la caméra pour numériser des documents."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1e40af"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "tn.devfactory.scanfactory",
+      "permissions": ["CAMERA"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "ScanFactory utilise la caméra pour numériser des documents."
+        }
+      ]
+    ]
+  }
+}
