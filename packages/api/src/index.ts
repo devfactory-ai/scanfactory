@@ -4,6 +4,7 @@ import { authRoutes } from './auth/routes';
 import { extractionRoutes } from './core/extraction/routes';
 import { validationRoutes } from './core/validation/routes';
 import { errorHandler } from './lib/errors';
+import { handleQueueMessage, type MessageBatch } from './core/pipeline/consumer';
 
 // Type definitions for Cloudflare bindings
 export interface Env {
@@ -55,4 +56,10 @@ app.get('/api/admin/pipelines', async (c) => {
   return c.json({ pipelines: pipelines.results ?? [] });
 });
 
-export default app;
+// Export for Cloudflare Workers
+export default {
+  fetch: app.fetch,
+  async queue(batch: MessageBatch, env: Env): Promise<void> {
+    await handleQueueMessage(batch, env);
+  },
+};
