@@ -4,6 +4,7 @@ import { AuthProvider } from './hooks/useAuth';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
+import { Scan } from './pages/Scan';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -15,15 +16,6 @@ const queryClient = new QueryClient({
 });
 
 // Placeholder pages until we implement them
-function ScanPage() {
-  return (
-    <div className="text-center py-12">
-      <h1 className="text-2xl font-bold text-gray-900">Scan</h1>
-      <p className="text-gray-600 mt-2">Page de numérisation (à implémenter)</p>
-    </div>
-  );
-}
-
 function ValidationQueuePage() {
   return (
     <div className="text-center py-12">
@@ -57,7 +49,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Layout>
-                    <ScanPage />
+                    <Scan />
                   </Layout>
                 </ProtectedRoute>
               }
