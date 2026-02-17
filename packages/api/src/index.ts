@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { corsMiddleware } from './middleware/cors';
 import { authRoutes } from './auth/routes';
 import { extractionRoutes } from './core/extraction/routes';
+import { validationRoutes } from './core/validation/routes';
 import { errorHandler } from './lib/errors';
 
 // Type definitions for Cloudflare bindings
@@ -42,6 +43,9 @@ app.route('/api/auth', authRoutes);
 
 // Document routes (protected)
 app.route('/api/documents', extractionRoutes);
+
+// Validation routes (protected)
+app.route('/api/validation', validationRoutes);
 
 // Admin routes for pipelines list (from extractionRoutes)
 app.get('/api/admin/pipelines', async (c) => {
