@@ -1,29 +1,40 @@
 name = "scanfactory-api"
 main = "src/index.ts"
 compatibility_date = "2024-02-01"
+compatibility_flags = ["nodejs_compat"]
 
+# ============================================================================
 # D1 Database
+# ============================================================================
 [[d1_databases]]
 binding = "DB"
 database_name = "scanfactory-db"
-database_id = "local"
+database_id = "placeholder-will-be-replaced"
 
+# ============================================================================
 # R2 Storage - Document Scans
+# ============================================================================
 [[r2_buckets]]
 binding = "SCANS"
 bucket_name = "scanfactory-scans"
 
+# ============================================================================
 # R2 Storage - Export Documents
+# ============================================================================
 [[r2_buckets]]
 binding = "EXPORTS"
 bucket_name = "scanfactory-exports"
 
-# KV Namespace - Cache & Sessions
+# ============================================================================
+# KV Namespace - Cache, Sessions, Rate Limiting
+# ============================================================================
 [[kv_namespaces]]
 binding = "CACHE"
-id = "local"
+id = "placeholder-will-be-replaced"
 
+# ============================================================================
 # Queue - Async Document Processing
+# ============================================================================
 [[queues.producers]]
 binding = "DOC_QUEUE"
 queue = "scanfactory-doc-queue"
@@ -33,21 +44,104 @@ queue = "scanfactory-doc-queue"
 max_batch_size = 10
 max_batch_timeout = 30
 
-# Environment Variables
+# ============================================================================
+# Environment Variables (non-sensitive)
+# ============================================================================
 [vars]
+ENVIRONMENT = "development"
 OCR_API_URL = "https://ocr.devfactory.tn/api"
+CORS_ORIGIN = "http://localhost:5173"
+LOG_LEVEL = "debug"
 
-# Secrets (set via wrangler secret put)
-# OCR_API_KEY
-# JWT_SECRET
-# TWILIO_ACCOUNT_SID
-# TWILIO_AUTH_TOKEN
-# TWILIO_PHONE_NUMBER
+# ============================================================================
+# Secrets (set via: wrangler secret put SECRET_NAME)
+# ============================================================================
+# Required secrets:
+# - JWT_SECRET: Secret key for JWT signing (min 32 chars)
+# - OCR_API_KEY: API key for remote OCR service
+# - TWILIO_ACCOUNT_SID: Twilio account SID for OTP SMS
+# - TWILIO_AUTH_TOKEN: Twilio auth token
+# - TWILIO_PHONE_NUMBER: Twilio phone number for sending SMS
 
+# ============================================================================
 # Cron Triggers
+# ============================================================================
 [triggers]
-crons = ["*/5 * * * *"]
+crons = [
+  "*/5 * * * *",   # Every 5 minutes - process pending documents
+  "0 2 * * *",     # Daily at 2 AM - auto-close batches past max_days
+  "0 3 * * 0",     # Weekly Sunday 3 AM - cleanup old audit logs
+]
 
+# ============================================================================
+# Development Environment
+# ============================================================================
 [dev]
 port = 8787
 local_protocol = "http"
+
+# ============================================================================
+# Staging Environment
+# ============================================================================
+[env.staging]
+name = "scanfactory-api-staging"
+vars = { ENVIRONMENT = "staging", CORS_ORIGIN = "https://staging.scanfactory.devfactory.tn", LOG_LEVEL = "info" }
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "scanfactory-db-staging"
+database_id = "placeholder-staging-db-id"
+
+[[env.staging.r2_buckets]]
+binding = "SCANS"
+bucket_name = "scanfactory-scans-staging"
+
+[[env.staging.r2_buckets]]
+binding = "EXPORTS"
+bucket_name = "scanfactory-exports-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "CACHE"
+id = "placeholder-staging-kv-id"
+
+[[env.staging.queues.producers]]
+binding = "DOC_QUEUE"
+queue = "scanfactory-doc-queue-staging"
+
+# ============================================================================
+# Production Environment
+# ============================================================================
+[env.production]
+name = "scanfactory-api"
+vars = { ENVIRONMENT = "production", CORS_ORIGIN = "https://scanfactory.devfactory.tn", LOG_LEVEL = "warn" }
+routes = [
+  { pattern = "api.scanfactory.devfactory.tn", custom_domain = true }
+]
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "scanfactory-db"
+database_id = "placeholder-production-db-id"
+
+[[env.production.r2_buckets]]
+binding = "SCANS"
+bucket_name = "scanfactory-scans"
+
+[[env.production.r2_buckets]]
+binding = "EXPORTS"
+bucket_name = "scanfactory-exports"
+
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "placeholder-production-kv-id"
+
+[[env.production.queues.producers]]
+binding = "DOC_QUEUE"
+queue = "scanfactory-doc-queue"
+
+[[env.production.queues.consumers]]
+queue = "scanfactory-doc-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "scanfactory-doc-dlq"

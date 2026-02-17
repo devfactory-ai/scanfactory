@@ -10,7 +10,10 @@
     "lint": "eslint . --ext ts,tsx",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "deploy": "npm run build && npx wrangler pages deploy dist --project-name=scanfactory-web",
+    "deploy:staging": "npm run build && npx wrangler pages deploy dist --project-name=scanfactory-web --branch=staging",
+    "deploy:production": "npm run build && npx wrangler pages deploy dist --project-name=scanfactory-web --branch=main"
   },
   "dependencies": {
     "react": "^18.2.0",
