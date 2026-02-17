@@ -5,6 +5,7 @@ import { extractionRoutes } from './core/extraction/routes';
 import { validationRoutes } from './core/validation/routes';
 import { errorHandler } from './lib/errors';
 import { handleQueueMessage, type MessageBatch } from './core/pipeline/consumer';
+import { handleScheduledBatchClosure } from './core/batches/cron';
 
 // Type definitions for Cloudflare bindings
 export interface Env {
@@ -61,5 +62,8 @@ export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch, env: Env): Promise<void> {
     await handleQueueMessage(batch, env);
+  },
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await handleScheduledBatchClosure(env);
   },
 };
