@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../index';
 import { createToken, storeSession, invalidateSession, verifyToken } from './jwt';
+import { requestOTP, verifyOTP } from './otp';
 import { ValidationError, UnauthorizedError } from '../lib/errors';
 
 // Simple password hashing using Web Crypto API
@@ -152,6 +153,48 @@ authRoutes.post('/logout', async (c) => {
   }
 
   return c.json({ success: true });
+});
+
+// POST /api/auth/otp/request - Request OTP code
+authRoutes.post('/otp/request', async (c) => {
+  const body = await c.req.json<{ phone: string }>();
+
+  if (!body.phone) {
+    throw new ValidationError('Numéro de téléphone requis');
+  }
+
+  const result = await requestOTP(c.env, body.phone);
+
+  if (!result.success) {
+    throw new ValidationError(result.message);
+  }
+
+  return c.json({ message: result.message });
+});
+
+// POST /api/auth/otp/verify - Verify OTP code
+authRoutes.post('/otp/verify', async (c) => {
+  const body = await c.req.json<{ phone: string; code: string }>();
+
+  if (!body.phone || !body.code) {
+    throw new ValidationError('Numéro de téléphone et code requis');
+  }
+
+  const result = await verifyOTP(c.env, body.phone, body.code);
+
+  if (!result.success) {
+    throw new UnauthorizedError(result.message);
+  }
+
+  // Store session
+  if (result.token && result.user) {
+    await storeSession(c.env.CACHE, result.user.id, result.token);
+  }
+
+  return c.json({
+    token: result.token,
+    user: result.user,
+  });
 });
 
 // GET /api/auth/me - Get current user info
