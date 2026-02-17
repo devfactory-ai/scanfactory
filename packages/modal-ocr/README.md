@@ -1,46 +1,39 @@
 # ScanFactory Modal OCR Service
 
-Service de traitement OCR et d'extraction de données pour documents médicaux, déployé sur [Modal](https://modal.com).
+Service de traitement OCR pour documents médicaux avec PaddleOCR, déployé sur [Modal](https://modal.com).
 
-## Fonctionnalités
-
-- **OCR haute précision** avec PaddleOCR (support français)
-- **Analyse de layout** pour documents structurés
-- **Extraction IA** avec Claude pour données médicales
-- **Pipelines spécialisés** : Bulletin de soins, Factures
-- **Scalabilité automatique** avec Modal
+> **Note**: L'extraction LLM est gérée par Cloudflare Workers AI (gratuit) avec des modèles open-source comme Llama 3.1 et Mistral.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Modal Platform                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────────┐    ┌──────────────────┐               │
-│  │   OCRService     │    │ ExtractionService │              │
-│  │   (PaddleOCR)    │───▶│    (Claude AI)    │              │
-│  │   CPU: 2, 4GB    │    │   CPU: 1, 1GB     │              │
-│  └────────┬─────────┘    └────────┬─────────┘               │
-│           │                       │                          │
-│  ┌────────▼───────────────────────▼─────────┐               │
-│  │            Web Endpoints                  │               │
-│  │  /process_ocr  /process_extraction       │               │
-│  │  /process_document  /health              │               │
-│  └──────────────────────────────────────────┘               │
-│                                                              │
-│  ┌──────────────────┐                                       │
-│  │  Model Cache     │  (Volume persistant)                  │
-│  │  PaddleOCR models│                                       │
-│  └──────────────────┘                                       │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Pipeline Complète                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────┐     ┌──────────────────┐     ┌─────────────────────────────┐  │
+│  │  Image  │────▶│  Modal           │────▶│  Cloudflare Workers AI      │  │
+│  │  (scan) │     │  (PaddleOCR)     │     │  (Llama 3.1 / Mistral)      │  │
+│  └─────────┘     │                  │     │                             │  │
+│                  │  - OCR français  │     │  - Extraction structurée    │  │
+│                  │  - Layout detect │     │  - bulletin_soin, facture   │  │
+│                  │  - ~$0.001/doc   │     │  - GRATUIT                  │  │
+│                  └──────────────────┘     └─────────────────────────────┘  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Fonctionnalités
+
+- **OCR haute précision** avec PaddleOCR (support français natif)
+- **Détection de layout** pour documents structurés (header, body, footer)
+- **Scalabilité automatique** avec Modal
+- **Cache des modèles** pour démarrages rapides
 
 ## Prérequis
 
 - Python 3.10+
-- Compte [Modal](https://modal.com)
-- Clé API Anthropic (pour l'extraction)
+- Compte [Modal](https://modal.com) (gratuit pour démarrer)
 
 ## Installation
 
@@ -51,22 +44,8 @@ pip install modal
 # S'authentifier
 modal token new
 
-# Cloner et naviguer
+# Naviguer vers le package
 cd packages/modal-ocr
-```
-
-## Configuration
-
-### 1. Secret Anthropic
-
-```bash
-modal secret create anthropic-api-key ANTHROPIC_API_KEY=sk-ant-xxx
-```
-
-### 2. Volume pour le cache
-
-```bash
-modal volume create scanfactory-model-cache
 ```
 
 ## Déploiement
@@ -81,6 +60,10 @@ chmod +x deploy.sh
 ### Méthode manuelle
 
 ```bash
+# Créer le volume pour le cache
+modal volume create scanfactory-model-cache
+
+# Déployer
 modal deploy app.py
 ```
 
@@ -89,17 +72,17 @@ modal deploy app.py
 | Endpoint | Méthode | Description |
 |----------|---------|-------------|
 | `/health` | GET | Health check |
-| `/process_ocr` | POST | Traitement OCR seul |
-| `/process_extraction` | POST | Extraction de données |
-| `/process_document` | POST | Pipeline complète OCR + Extraction |
+| `/process_ocr` | POST | Traitement OCR |
 
-### Documentation interactive
+### URL de base
 
-Chaque endpoint expose une documentation Swagger à `/docs`.
+```
+https://devfactory-ai--scanfactory-ocr-{endpoint}.modal.run
+```
 
 ## Utilisation
 
-### OCR seul
+### OCR simple
 
 ```bash
 curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
@@ -110,10 +93,12 @@ curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
   }'
 ```
 
-**Réponse:**
+### Réponse
+
 ```json
 {
-  "text": "Texte extrait du document...",
+  "success": true,
+  "text": "BULLETIN DE SOINS\nPatient: DUPONT Jean\n...",
   "blocks": [
     {
       "text": "BULLETIN DE SOINS",
@@ -121,159 +106,76 @@ curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
       "bbox": {"x1": 100, "y1": 50, "x2": 400, "y2": 80}
     }
   ],
-  "confidence": 0.95,
   "layout_info": {
     "width": 800,
     "height": 1200,
     "regions": [
-      {"type": "header", "y_start": 0, "y_end": 180}
+      {"type": "header", "y_start": 0, "y_end": 180, "block_count": 3},
+      {"type": "body", "y_start": 180, "y_end": 1020, "block_count": 25},
+      {"type": "footer", "y_start": 1020, "y_end": 1200, "block_count": 2}
     ]
-  }
+  },
+  "confidence": 0.95
 }
 ```
 
-### Extraction seule
+### Avec image base64
 
 ```bash
-curl -X POST https://devfactory-ai--scanfactory-ocr-process-extraction.modal.run \
+curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
   -H "Content-Type: application/json" \
   -d '{
-    "ocr_text": "BULLETIN DE SOINS\nPatient: DUPONT Jean\n...",
-    "pipeline": "bulletin_soin"
+    "image_base64": "'$(base64 -i document.jpg)'"
   }'
-```
-
-**Réponse:**
-```json
-{
-  "success": true,
-  "data": {
-    "patient_nom": {"value": "DUPONT", "confidence": 0.95},
-    "patient_prenom": {"value": "Jean", "confidence": 0.92},
-    "date_soins": {"value": "2024-02-15", "confidence": 0.88},
-    "montant_total": {"value": 45.50, "confidence": 0.90}
-  },
-  "model": "claude-3-haiku"
-}
-```
-
-### Pipeline complète
-
-```bash
-curl -X POST https://devfactory-ai--scanfactory-ocr-process-document.modal.run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image_base64": "base64_encoded_image...",
-    "pipeline": "bulletin_soin"
-  }'
-```
-
-**Réponse:**
-```json
-{
-  "ocr_result": {
-    "text": "...",
-    "blocks": [...],
-    "confidence": 0.95
-  },
-  "extracted_data": {
-    "success": true,
-    "data": {...}
-  },
-  "pipeline": "bulletin_soin"
-}
-```
-
-## Pipelines disponibles
-
-### bulletin_soin
-
-Extraction de bulletins de soins CPAM:
-- `patient_nom`, `patient_prenom`, `patient_nir`
-- `patient_date_naissance`
-- `date_soins`
-- `prescripteur_nom`, `prescripteur_finess`
-- `actes` (liste)
-- `montant_total`
-- `organisme`
-
-### facture
-
-Extraction de factures médicales:
-- `numero_facture`, `date_facture`
-- `emetteur_nom`, `emetteur_siret`, `emetteur_adresse`
-- `patient_nom`
-- `lignes` (liste)
-- `sous_total_ht`, `tva`, `total_ttc`
-- `mode_paiement`
-
-### generic
-
-Pipeline générique avec champs personnalisés:
-
-```json
-{
-  "pipeline": "generic",
-  "fields": [
-    {"name": "date", "type": "date", "description": "Date du document"},
-    {"name": "montant", "type": "number", "description": "Montant total"}
-  ]
-}
 ```
 
 ## Intégration avec Cloudflare
 
-L'API Cloudflare appelle les endpoints Modal pour le traitement:
+Le flux complet utilise Modal pour l'OCR et Cloudflare Workers AI pour l'extraction:
 
 ```typescript
-// packages/api/src/core/extraction/modal-client.ts
-const MODAL_BASE_URL = 'https://devfactory-ai--scanfactory-ocr';
+// 1. OCR avec Modal
+const ocrResult = await modalAdapter.ocr(imageUrl);
 
-export async function processDocument(imageUrl: string, pipeline: string) {
-  const response = await fetch(`${MODAL_BASE_URL}-process-document.modal.run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image_url: imageUrl, pipeline })
-  });
-  return response.json();
-}
+// 2. Extraction avec Workers AI (gratuit)
+const extractor = new WorkersAIExtractor(env);
+const extracted = await extractor.extractBulletinSoin(ocrResult.text);
+```
+
+Configuration `wrangler.toml`:
+```toml
+[vars]
+MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr"
+
+[ai]
+binding = "AI"
 ```
 
 ## Développement local
 
 ```bash
-# Lancer en mode développement (hot reload)
+# Mode développement (hot reload)
 modal serve app.py
 
 # Tester une fonction
 modal run app.py::health
 ```
 
+## Coûts
+
+| Service | Coût |
+|---------|------|
+| Modal OCR | ~$0.0002/sec (~$0.001/doc) |
+| Workers AI | **GRATUIT** |
+| **Total** | **~$0.001/document** |
+
 ## Monitoring
 
-Accéder au dashboard Modal pour voir:
-- Logs en temps réel
-- Métriques de performance
-- Utilisation des ressources
-- Historique des invocations
-
-## Coûts estimés
-
-| Resource | Coût approximatif |
-|----------|-------------------|
-| OCR (CPU 2 cores, 4GB) | ~$0.0002/sec |
-| Extraction (CPU 1 core, 1GB) | ~$0.00008/sec |
-| Volume storage | ~$0.20/GB/mois |
-
-Pipeline complète moyenne: ~$0.001-0.002 par document
+- **Dashboard Modal**: https://modal.com/apps/scanfactory-ocr
+- **Logs**: Accessibles dans le dashboard
+- **Métriques**: CPU, mémoire, latence
 
 ## Troubleshooting
-
-### Erreur "Secret not found"
-
-```bash
-modal secret create anthropic-api-key ANTHROPIC_API_KEY=your-key
-```
 
 ### Erreur "Volume not found"
 
@@ -281,13 +183,14 @@ modal secret create anthropic-api-key ANTHROPIC_API_KEY=your-key
 modal volume create scanfactory-model-cache
 ```
 
-### Timeout OCR
+### Premier appel lent
+
+Les modèles PaddleOCR sont téléchargés au premier appel (~30-60 sec).
+Les appels suivants sont rapides grâce au cache.
+
+### Timeout
 
 Augmenter le timeout dans `app.py`:
 ```python
 @app.cls(..., timeout=600)  # 10 minutes
 ```
-
-### Modèles PaddleOCR non téléchargés
-
-Les modèles sont téléchargés automatiquement au premier appel. Le premier appel peut prendre 30-60 secondes.

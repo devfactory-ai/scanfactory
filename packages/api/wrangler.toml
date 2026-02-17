@@ -40,6 +40,12 @@ id = "6b1daea39ae1444f94296910eed4ea2f"
 binding = "DOC_QUEUE"
 queue = "scanfactory-doc-queue"
 
+# ============================================================================
+# Workers AI - LLM for extraction (free tier)
+# ============================================================================
+[ai]
+binding = "AI"
+
 [[queues.consumers]]
 queue = "scanfactory-doc-queue"
 max_batch_size = 10

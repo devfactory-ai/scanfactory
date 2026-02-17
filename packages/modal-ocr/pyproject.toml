@@ -1,7 +1,7 @@
 [project]
 name = "scanfactory-modal-ocr"
-version = "1.0.0"
-description = "ScanFactory OCR and AI extraction service on Modal"
+version = "1.1.0"
+description = "ScanFactory OCR service on Modal with PaddleOCR"
 requires-python = ">=3.10"
 dependencies = [
     "modal>=0.64.0",

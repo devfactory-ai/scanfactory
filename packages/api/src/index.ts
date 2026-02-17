@@ -18,6 +18,7 @@ export interface Env {
   EXPORTS: R2Bucket;
   CACHE: KVNamespace;
   DOC_QUEUE: Queue;
+  AI: Ai; // Cloudflare Workers AI
   OCR_API_URL: string;
   OCR_API_KEY: string;
   JWT_SECRET: string;
