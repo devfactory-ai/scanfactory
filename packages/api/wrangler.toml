@@ -2,6 +2,7 @@ name = "scanfactory-api"
 main = "src/index.ts"
 compatibility_date = "2024-02-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "598691d7638032f53d07c1cb7c429ba9"
 
 # ============================================================================
 # D1 Database
@@ -9,7 +10,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "scanfactory-db"
-database_id = "placeholder-will-be-replaced"
+database_id = "38ea0588-268f-4158-bed6-5af63ade833f"
 
 # ============================================================================
 # R2 Storage - Document Scans
@@ -30,7 +31,7 @@ bucket_name = "scanfactory-exports"
 # ============================================================================
 [[kv_namespaces]]
 binding = "CACHE"
-id = "placeholder-will-be-replaced"
+id = "6b1daea39ae1444f94296910eed4ea2f"
 
 # ============================================================================
 # Queue - Async Document Processing
@@ -70,7 +71,6 @@ LOG_LEVEL = "debug"
 crons = [
   "*/5 * * * *",   # Every 5 minutes - process pending documents
   "0 2 * * *",     # Daily at 2 AM - auto-close batches past max_days
-  "0 3 * * 0",     # Weekly Sunday 3 AM - cleanup old audit logs
 ]
 
 # ============================================================================
