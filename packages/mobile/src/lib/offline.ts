@@ -11,8 +11,10 @@ export interface ScanHistoryItem {
   status: 'pending' | 'uploaded' | 'validated' | 'rejected' | 'error';
   confidence_score: number | null;
   created_at: string;
+  updated_at?: string; // Track last update time for conflict detection
   imageUri?: string; // Local image URI for pending uploads
   error?: string; // Error message if upload failed
+  locallyModified?: boolean; // Flag for local changes not yet synced
 }
 
 export interface PendingUpload {
@@ -207,7 +209,47 @@ class OfflineStorage {
   }
 
   /**
-   * Merge server history with local history
+   * Conflict resolution result
+   */
+  private resolveConflict(
+    local: ScanHistoryItem,
+    server: {
+      id: string;
+      status: string;
+      confidence_score: number | null;
+      updated_at?: string;
+    }
+  ): ScanHistoryItem {
+    // If local has unsaved modifications, keep local data
+    if (local.locallyModified) {
+      return {
+        ...local,
+        // Merge server-only fields that don't conflict
+        confidence_score: server.confidence_score ?? local.confidence_score,
+      };
+    }
+
+    // Compare timestamps if available
+    const localTime = local.updated_at ? new Date(local.updated_at).getTime() : 0;
+    const serverTime = server.updated_at ? new Date(server.updated_at).getTime() : Date.now();
+
+    // Server wins if it's newer or if local has no timestamp
+    if (serverTime >= localTime) {
+      return {
+        ...local,
+        status: server.status as ScanHistoryItem['status'],
+        confidence_score: server.confidence_score,
+        updated_at: server.updated_at ?? new Date().toISOString(),
+        locallyModified: false,
+      };
+    }
+
+    // Local wins if it's newer
+    return local;
+  }
+
+  /**
+   * Merge server history with local history (with conflict resolution)
    */
   async mergeServerHistory(
     serverItems: Array<{
@@ -217,21 +259,36 @@ class OfflineStorage {
       status: string;
       confidence_score: number | null;
       created_at: string;
+      updated_at?: string;
     }>
-  ): Promise<void> {
+  ): Promise<{ merged: number; conflicts: number }> {
     await this.init();
+
+    let conflicts = 0;
+    let merged = 0;
 
     for (const serverItem of serverItems) {
       const existingIndex = this.history.findIndex((h) => h.id === serverItem.id);
+
       if (existingIndex >= 0) {
-        // Update existing item
-        this.history[existingIndex] = {
-          ...this.history[existingIndex],
-          status: serverItem.status as ScanHistoryItem['status'],
-          confidence_score: serverItem.confidence_score,
-        };
+        const existing = this.history[existingIndex];
+
+        // Check for conflict: local has different status than server
+        const hasConflict =
+          existing.locallyModified ||
+          (existing.status !== serverItem.status &&
+            existing.status !== 'pending' &&
+            existing.status !== 'error');
+
+        if (hasConflict) {
+          conflicts++;
+        }
+
+        // Resolve and update
+        this.history[existingIndex] = this.resolveConflict(existing, serverItem);
+        merged++;
       } else {
-        // Add new item
+        // Add new item from server
         this.history.push({
           id: serverItem.id,
           localId: serverItem.id,
@@ -240,7 +297,10 @@ class OfflineStorage {
           status: serverItem.status as ScanHistoryItem['status'],
           confidence_score: serverItem.confidence_score,
           created_at: serverItem.created_at,
+          updated_at: serverItem.updated_at,
+          locallyModified: false,
         });
+        merged++;
       }
     }
 
@@ -255,6 +315,30 @@ class OfflineStorage {
     }
 
     await this.saveHistory();
+
+    return { merged, conflicts };
+  }
+
+  /**
+   * Mark an item as locally modified
+   */
+  async markLocallyModified(id: string): Promise<void> {
+    await this.init();
+
+    const index = this.history.findIndex((h) => h.id === id || h.localId === id);
+    if (index >= 0) {
+      this.history[index].locallyModified = true;
+      this.history[index].updated_at = new Date().toISOString();
+      await this.saveHistory();
+    }
+  }
+
+  /**
+   * Get items with local modifications (for sync)
+   */
+  async getLocallyModified(): Promise<ScanHistoryItem[]> {
+    await this.init();
+    return this.history.filter((h) => h.locallyModified);
   }
 
   /**

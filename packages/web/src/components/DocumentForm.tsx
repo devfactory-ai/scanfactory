@@ -1,4 +1,4 @@
-import { useState, useEffect, type ChangeEvent } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo, type ChangeEvent } from 'react';
 import { ConfidenceBadge } from './ConfidenceBadge';
 
 interface FieldDisplayConfig {
@@ -31,6 +31,57 @@ function renderFieldValue(value: unknown): string {
   return String(value);
 }
 
+/**
+ * Memoized field input component to prevent unnecessary re-renders
+ */
+interface FieldInputProps {
+  name: string;
+  label: string;
+  value: unknown;
+  confidence: number | null;
+  disabled: boolean;
+  onChange: (fieldName: string, value: string) => void;
+}
+
+const FieldInput = memo(function FieldInput({
+  name,
+  label,
+  value,
+  confidence,
+  disabled,
+  onChange,
+}: FieldInputProps) {
+  const handleChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      onChange(name, e.target.value);
+    },
+    [name, onChange]
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label htmlFor={name} className="block text-sm font-medium text-gray-700">
+          {label}
+        </label>
+        <ConfidenceBadge confidence={confidence} />
+      </div>
+      <input
+        id={name}
+        type="text"
+        value={renderFieldValue(value)}
+        onChange={handleChange}
+        disabled={disabled}
+        className={`
+          w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent
+          ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}
+          ${confidence !== null && confidence < 0.7 ? 'border-red-300 bg-red-50' : 'border-gray-300'}
+        `}
+      />
+    </div>
+  );
+});
+
 export function DocumentForm({
   extractedData,
   fieldDisplay,
@@ -44,21 +95,26 @@ export function DocumentForm({
     setFormData(extractedData);
   }, [extractedData]);
 
-  const handleFieldChange = (fieldName: string, value: string) => {
-    const newData = { ...formData, [fieldName]: value };
-    setFormData(newData);
-    onChange(newData);
-  };
+  const handleFieldChange = useCallback(
+    (fieldName: string, value: string) => {
+      setFormData((prev) => {
+        const newData = { ...prev, [fieldName]: value };
+        onChange(newData);
+        return newData;
+      });
+    },
+    [onChange]
+  );
 
-  // Get all fields organized by groups or flat if no display config
-  const getFields = (): Array<{ name: string; label: string; value: unknown; confidence: number | null }> => {
-    const fields: Array<{ name: string; label: string; value: unknown; confidence: number | null }> = [];
+  // Memoized fields computation
+  const fields = useMemo(() => {
+    const result: Array<{ name: string; label: string; value: unknown; confidence: number | null }> = [];
 
     if (fieldDisplay?.groups) {
       for (const group of fieldDisplay.groups) {
         for (const fieldName of group.fields) {
           if (fieldName in formData) {
-            fields.push({
+            result.push({
               name: fieldName,
               label: formatFieldLabel(fieldName),
               value: formData[fieldName],
@@ -71,7 +127,7 @@ export function DocumentForm({
       // No display config, show all fields
       for (const [fieldName, value] of Object.entries(formData)) {
         if (typeof value !== 'object' || value === null) {
-          fields.push({
+          result.push({
             name: fieldName,
             label: formatFieldLabel(fieldName),
             value,
@@ -81,97 +137,69 @@ export function DocumentForm({
       }
     }
 
-    return fields;
-  };
+    return result;
+  }, [formData, fieldDisplay, confidenceScores]);
+
+  // Memoized grouped fields for rendering
+  const groupedFields = useMemo(() => {
+    if (!fieldDisplay?.groups) return null;
+
+    return fieldDisplay.groups.map((group) => ({
+      ...group,
+      fields: group.fields
+        .filter((fieldName) => fieldName in formData)
+        .map((fieldName) => ({
+          name: fieldName,
+          label: formatFieldLabel(fieldName),
+          value: formData[fieldName],
+          confidence: confidenceScores[fieldName] ?? null,
+        })),
+    })).filter((group) => group.fields.length > 0);
+  }, [fieldDisplay, formData, confidenceScores]);
 
   const renderGroups = () => {
-    if (!fieldDisplay?.groups) {
-      // Render flat list
+    if (!groupedFields) {
+      // Render flat list using memoized FieldInput
       return (
         <div className="space-y-4">
-          {getFields().map((field) => (
-            <div key={field.name}>
-              <div className="flex items-center justify-between mb-1">
-                <label
-                  htmlFor={field.name}
-                  className="block text-sm font-medium text-gray-700"
-                >
-                  {field.label}
-                </label>
-                <ConfidenceBadge confidence={field.confidence} />
-              </div>
-              <input
-                id={field.name}
-                type="text"
-                value={renderFieldValue(field.value)}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  handleFieldChange(field.name, e.target.value)
-                }
-                disabled={disabled}
-                className={`
-                  w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent
-                  ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}
-                  ${field.confidence !== null && field.confidence < 0.7 ? 'border-red-300 bg-red-50' : 'border-gray-300'}
-                `}
-              />
-            </div>
+          {fields.map((field) => (
+            <FieldInput
+              key={field.name}
+              name={field.name}
+              label={field.label}
+              value={field.value}
+              confidence={field.confidence}
+              disabled={disabled}
+              onChange={handleFieldChange}
+            />
           ))}
         </div>
       );
     }
 
-    // Render grouped
+    // Render grouped using memoized FieldInput
     return (
       <div className="space-y-6">
-        {fieldDisplay.groups.map((group) => {
-          const groupFields = group.fields
-            .filter((fieldName) => fieldName in formData)
-            .map((fieldName) => ({
-              name: fieldName,
-              label: formatFieldLabel(fieldName),
-              value: formData[fieldName],
-              confidence: confidenceScores[fieldName] ?? null,
-            }));
-
-          if (groupFields.length === 0) return null;
-
-          return (
-            <div key={group.name}>
-              <h3 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b">
-                {group.label}
-              </h3>
-              <div className="space-y-3">
-                {groupFields.map((field) => (
-                  <div key={field.name}>
-                    <div className="flex items-center justify-between mb-1">
-                      <label
-                        htmlFor={field.name}
-                        className="block text-sm font-medium text-gray-700"
-                      >
-                        {field.label}
-                      </label>
-                      <ConfidenceBadge confidence={field.confidence} />
-                    </div>
-                    <input
-                      id={field.name}
-                      type="text"
-                      value={renderFieldValue(field.value)}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        handleFieldChange(field.name, e.target.value)
-                      }
-                      disabled={disabled}
-                      className={`
-                        w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent
-                        ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}
-                        ${field.confidence !== null && field.confidence < 0.7 ? 'border-red-300 bg-red-50' : 'border-gray-300'}
-                      `}
-                    />
-                  </div>
-                ))}
-              </div>
+        {groupedFields.map((group) => (
+          <div key={group.name}>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b">
+              {group.label}
+            </h3>
+            <div className="space-y-3">
+              {group.fields.map((field) => (
+                <FieldInput
+                  key={field.name}
+                  name={field.name}
+                  label={field.label}
+                  value={field.value}
+                  confidence={field.confidence}
+                  disabled={disabled}
+                  onChange={handleFieldChange}
+                />
+              ))}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     );
   };
