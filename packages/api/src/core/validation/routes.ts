@@ -54,6 +54,72 @@ validationRoutes.get('/queue', async (c) => {
   });
 });
 
+// GET /api/validation/:id/adjacent - Get previous and next document IDs for navigation
+validationRoutes.get('/:id/adjacent', async (c) => {
+  const documentId = c.req.param('id');
+  const pipelineId = c.req.query('pipeline_id');
+
+  // Get current document to find its position
+  const currentDoc = await getDocumentById(c.env.DB, documentId);
+  if (!currentDoc) {
+    throw new NotFoundError('Document non trouvé');
+  }
+
+  // Build conditions for finding adjacent documents in the same queue
+  const conditions = ["status = 'pending'"];
+  const params: unknown[] = [];
+
+  if (pipelineId) {
+    conditions.push('pipeline_id = ?');
+    params.push(pipelineId);
+  }
+
+  const whereClause = conditions.join(' AND ');
+
+  // Get previous document (older, sorted by created_at ASC)
+  const previousDoc = await c.env.DB
+    .prepare(
+      `SELECT id FROM documents
+       WHERE ${whereClause} AND created_at < ?
+       ORDER BY created_at DESC
+       LIMIT 1`
+    )
+    .bind(...params, currentDoc.created_at)
+    .first<{ id: string }>();
+
+  // Get next document (newer, sorted by created_at ASC)
+  const nextDoc = await c.env.DB
+    .prepare(
+      `SELECT id FROM documents
+       WHERE ${whereClause} AND created_at > ?
+       ORDER BY created_at ASC
+       LIMIT 1`
+    )
+    .bind(...params, currentDoc.created_at)
+    .first<{ id: string }>();
+
+  // Get position and total count
+  const positionResult = await c.env.DB
+    .prepare(
+      `SELECT COUNT(*) as position FROM documents
+       WHERE ${whereClause} AND created_at <= ?`
+    )
+    .bind(...params, currentDoc.created_at)
+    .first<{ position: number }>();
+
+  const totalResult = await c.env.DB
+    .prepare(`SELECT COUNT(*) as total FROM documents WHERE ${whereClause}`)
+    .bind(...params)
+    .first<{ total: number }>();
+
+  return c.json({
+    previous: previousDoc?.id ?? null,
+    next: nextDoc?.id ?? null,
+    position: positionResult?.position ?? 1,
+    total: totalResult?.total ?? 1,
+  });
+});
+
 // GET /api/validation/:id - Get document detail with signed scan URL
 validationRoutes.get('/:id', async (c) => {
   const documentId = c.req.param('id');

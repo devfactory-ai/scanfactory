@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { ScanViewer } from '../components/ScanViewer';
 import { DocumentForm } from '../components/DocumentForm';
 import { ConfidenceBadge } from '../components/ConfidenceBadge';
+import { useKeyboardNavigation, KEYBOARD_SHORTCUTS } from '../hooks/useKeyboard';
 
 export function ValidationDetail() {
   const { id } = useParams<{ id: string }>();
@@ -12,11 +13,20 @@ export function ValidationDetail() {
   const queryClient = useQueryClient();
   const [editedData, setEditedData] = useState<Record<string, unknown> | null>(null);
 
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
   // Fetch document
   const { data, isLoading, error } = useQuery({
     queryKey: ['document', id],
     queryFn: () => api.getDocument(id!),
     enabled: !!id,
+  });
+
+  // Fetch adjacent documents for navigation
+  const { data: adjacentData } = useQuery({
+    queryKey: ['documentAdjacent', id, data?.document.pipeline_id],
+    queryFn: () => api.getAdjacentDocuments(id!, data?.document.pipeline_id),
+    enabled: !!id && !!data?.document.pipeline_id,
   });
 
   // Validate mutation
@@ -29,8 +39,52 @@ export function ValidationDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['validationQueue'] });
-      navigate('/validation');
+      // Navigate to next document if available, otherwise go back to queue
+      if (adjacentData?.next) {
+        navigate(`/validation/${adjacentData.next}`);
+      } else {
+        navigate('/validation');
+      }
     },
+  });
+
+  // Keyboard navigation callbacks
+  const handlePrevious = useCallback(() => {
+    if (adjacentData?.previous) {
+      navigate(`/validation/${adjacentData.previous}`);
+    }
+  }, [adjacentData?.previous, navigate]);
+
+  const handleNext = useCallback(() => {
+    if (adjacentData?.next) {
+      navigate(`/validation/${adjacentData.next}`);
+    }
+  }, [adjacentData?.next, navigate]);
+
+  const handleValidate = useCallback(() => {
+    if (data?.document.status === 'pending' && !validateMutation.isPending) {
+      validateMutation.mutate('validate');
+    }
+  }, [data?.document.status, validateMutation]);
+
+  const handleReject = useCallback(() => {
+    if (data?.document.status === 'pending' && !validateMutation.isPending) {
+      validateMutation.mutate('reject');
+    }
+  }, [data?.document.status, validateMutation]);
+
+  const handleBack = useCallback(() => {
+    navigate('/validation');
+  }, [navigate]);
+
+  // Setup keyboard navigation
+  useKeyboardNavigation({
+    onPrevious: handlePrevious,
+    onNext: handleNext,
+    onValidate: handleValidate,
+    onReject: handleReject,
+    onBack: handleBack,
+    enabled: !!data && !validateMutation.isPending,
   });
 
   if (!id) {
@@ -58,6 +112,57 @@ export function ValidationDetail() {
 
   return (
     <div className="h-[calc(100vh-12rem)]">
+      {/* Keyboard shortcuts modal */}
+      {showShortcuts && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowShortcuts(false)}>
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Raccourcis clavier</h3>
+              <button onClick={() => setShowShortcuts(false)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">Navigation</h4>
+                <div className="space-y-1">
+                  {KEYBOARD_SHORTCUTS.navigation.map((shortcut) => (
+                    <div key={shortcut.key} className="flex items-center justify-between text-sm">
+                      <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono">{shortcut.key}</kbd>
+                      <span className="text-gray-600">{shortcut.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">Actions</h4>
+                <div className="space-y-1">
+                  {KEYBOARD_SHORTCUTS.actions.map((shortcut) => (
+                    <div key={shortcut.key} className="flex items-center justify-between text-sm">
+                      <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono">{shortcut.key}</kbd>
+                      <span className="text-gray-600">{shortcut.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">Vue</h4>
+                <div className="space-y-1">
+                  {KEYBOARD_SHORTCUTS.view.map((shortcut) => (
+                    <div key={shortcut.key} className="flex items-center justify-between text-sm">
+                      <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono">{shortcut.key}</kbd>
+                      <span className="text-gray-600">{shortcut.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-4">
@@ -79,8 +184,36 @@ export function ValidationDetail() {
           </div>
         </div>
         <div className="flex items-center space-x-4">
+          {/* Navigation arrows */}
+          {adjacentData && (
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handlePrevious}
+                disabled={!adjacentData.previous}
+                className="p-1 text-gray-500 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Document précédent (←)"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span className="text-sm text-gray-600">
+                {adjacentData.position} / {adjacentData.total}
+              </span>
+              <button
+                onClick={handleNext}
+                disabled={!adjacentData.next}
+                className="p-1 text-gray-500 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Document suivant (→)"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          )}
           <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-600">Confiance globale:</span>
+            <span className="text-sm text-gray-600">Confiance:</span>
             <ConfidenceBadge confidence={doc.confidence_score} />
           </div>
           <span className={`
@@ -93,6 +226,16 @@ export function ValidationDetail() {
             {doc.status === 'validated' && 'Validé'}
             {doc.status === 'rejected' && 'Rejeté'}
           </span>
+          {/* Keyboard shortcuts help */}
+          <button
+            onClick={() => setShowShortcuts(!showShortcuts)}
+            className="p-1 text-gray-400 hover:text-gray-600"
+            title="Raccourcis clavier"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
         </div>
       </div>
 

@@ -259,6 +259,24 @@ class ApiClient {
   getScanUrl(documentId: string): string {
     return `${API_BASE}/documents/${documentId}/scan`;
   }
+
+  // Get adjacent documents for navigation
+  async getAdjacentDocuments(
+    documentId: string,
+    pipelineId?: string
+  ) {
+    const params = new URLSearchParams();
+    if (pipelineId) {
+      params.append('pipeline_id', pipelineId);
+    }
+    const query = params.toString();
+    return this.request<{
+      previous: string | null;
+      next: string | null;
+      position: number;
+      total: number;
+    }>(`/validation/${documentId}/adjacent${query ? `?${query}` : ''}`);
+  }
 }
 
 export const api = new ApiClient();
