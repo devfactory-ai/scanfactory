@@ -251,3 +251,104 @@ Vérifier que `CORS_ORIGIN` dans wrangler.toml correspond exactement à l'URL du
 | D1 rows written/day | 100K | 50M |
 | R2 storage | 10 GB | Illimité |
 | KV reads/day | 100K | 10M |
+
+---
+
+## Déploiement Modal (OCR Service)
+
+Le service OCR avec PaddleOCR et extraction IA est déployé sur [Modal](https://modal.com).
+
+### Architecture Modal
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Modal Platform                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────────┐    ┌──────────────────┐               │
+│  │   OCRService     │    │ ExtractionService │              │
+│  │   (PaddleOCR)    │───▶│    (Claude AI)    │              │
+│  │   CPU: 2, 4GB    │    │   CPU: 1, 1GB     │              │
+│  └────────┬─────────┘    └────────┬─────────┘               │
+│           │                       │                          │
+│  ┌────────▼───────────────────────▼─────────┐               │
+│  │            Web Endpoints                  │               │
+│  │  /process_ocr  /process_extraction       │               │
+│  │  /process_document  /health              │               │
+│  └──────────────────────────────────────────┘               │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Prérequis Modal
+
+1. **Compte Modal** : https://modal.com
+2. **Modal CLI** : `pip install modal`
+3. **Authentification** : `modal token new`
+4. **Clé API Anthropic** pour l'extraction IA
+
+### Configuration Modal
+
+```bash
+cd packages/modal-ocr
+
+# Créer le secret Anthropic
+modal secret create anthropic-api-key ANTHROPIC_API_KEY=sk-ant-xxx
+
+# Créer le volume pour le cache des modèles
+modal volume create scanfactory-model-cache
+```
+
+### Déploiement Modal
+
+```bash
+# Méthode 1: Script automatique
+./deploy.sh
+
+# Méthode 2: Commande directe
+modal deploy app.py
+
+# Mode développement (hot reload)
+modal serve app.py
+```
+
+### Endpoints Modal
+
+| Endpoint | URL |
+|----------|-----|
+| Health | `https://devfactory-ai--scanfactory-ocr-health.modal.run` |
+| OCR | `https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run` |
+| Extraction | `https://devfactory-ai--scanfactory-ocr-process-extraction.modal.run` |
+| Pipeline complète | `https://devfactory-ai--scanfactory-ocr-process-document.modal.run` |
+
+### Intégration Cloudflare ↔ Modal
+
+L'API Cloudflare utilise `ModalOCRAdapter` pour appeler le service Modal :
+
+```typescript
+// packages/api/src/core/extraction/modal-adapter.ts
+const adapter = new ModalOCRAdapter(env);
+const result = await adapter.processDocument(imageUrl, 'bulletin_soin');
+```
+
+Configuration dans `wrangler.toml` :
+```toml
+[vars]
+MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr"
+USE_MODAL_OCR = "true"
+```
+
+### Monitoring Modal
+
+- **Dashboard** : https://modal.com/apps/scanfactory-ocr
+- **Logs** : Accessibles dans le dashboard Modal
+- **Métriques** : CPU, mémoire, latence par fonction
+
+### Coûts Modal
+
+| Ressource | Coût estimé |
+|-----------|-------------|
+| OCR (CPU 2 cores, 4GB) | ~$0.0002/sec |
+| Extraction (CPU 1 core, 1GB) | ~$0.00008/sec |
+| Volume storage | ~$0.20/GB/mois |
+| **Pipeline complète** | **~$0.001-0.002/document** |

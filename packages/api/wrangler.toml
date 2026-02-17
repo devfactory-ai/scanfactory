@@ -51,6 +51,8 @@ max_batch_timeout = 30
 [vars]
 ENVIRONMENT = "development"
 OCR_API_URL = "https://ocr.devfactory.tn/api"
+MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr"
+USE_MODAL_OCR = "true"
 CORS_ORIGIN = "http://localhost:5173"
 LOG_LEVEL = "debug"
 
@@ -85,7 +87,7 @@ local_protocol = "http"
 # ============================================================================
 [env.staging]
 name = "scanfactory-api-staging"
-vars = { ENVIRONMENT = "staging", CORS_ORIGIN = "https://staging.scanfactory.devfactory.tn", LOG_LEVEL = "info" }
+vars = { ENVIRONMENT = "staging", CORS_ORIGIN = "https://staging.scanfactory.devfactory.tn", LOG_LEVEL = "info", MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr", USE_MODAL_OCR = "true" }
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -113,7 +115,7 @@ queue = "scanfactory-doc-queue-staging"
 # ============================================================================
 [env.production]
 name = "scanfactory-api"
-vars = { ENVIRONMENT = "production", CORS_ORIGIN = "https://scanfactory.devfactory.tn", LOG_LEVEL = "warn" }
+vars = { ENVIRONMENT = "production", CORS_ORIGIN = "https://scanfactory.devfactory.tn", LOG_LEVEL = "warn", MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr", USE_MODAL_OCR = "true" }
 routes = [
   { pattern = "api.scanfactory.devfactory.tn", custom_domain = true }
 ]

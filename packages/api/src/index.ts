@@ -21,6 +21,8 @@ export interface Env {
   OCR_API_URL: string;
   OCR_API_KEY: string;
   JWT_SECRET: string;
+  MODAL_OCR_URL?: string; // Modal OCR service URL
+  USE_MODAL_OCR?: string; // 'true' to use Modal OCR service
   ALLOWED_ORIGINS?: string; // Comma-separated list of allowed CORS origins
   ENVIRONMENT?: 'development' | 'staging' | 'production';
 }

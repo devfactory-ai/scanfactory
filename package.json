@@ -12,7 +12,9 @@
     "build:api": "npm run build --workspace=packages/api",
     "build:web": "npm run build --workspace=packages/web",
     "test": "npm run test --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "lint": "npm run lint --workspaces --if-present",
+    "deploy:modal": "cd packages/modal-ocr && ./deploy.sh",
+    "deploy:all": "npm run build:api && npm run build:web && npm run deploy:modal"
   },
   "engines": {
     "node": ">=18.0.0"
