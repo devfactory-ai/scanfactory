@@ -7,6 +7,7 @@ import { Login } from './pages/Login';
 import { Scan } from './pages/Scan';
 import { ValidationQueue } from './pages/ValidationQueue';
 import { ValidationDetail } from './pages/ValidationDetail';
+import { ValidationBatch } from './pages/ValidationBatch';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -63,6 +64,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <ValidationDetail />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/validation/batch"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <ValidationBatch />
                   </Layout>
                 </ProtectedRoute>
               }
