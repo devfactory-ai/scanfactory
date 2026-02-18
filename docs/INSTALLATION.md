@@ -12,10 +12,12 @@ Ce guide vous accompagne dans l'installation et la configuration de ScanFactory.
 | npm | 10+ | `npm --version` |
 | Git | 2.x | `git --version` |
 | wrangler | 3.x+ | `npx wrangler --version` |
+| Python | 3.10+ | `python --version` (pour Modal-OCR) |
 
 ### Comptes requis
 
 - **Cloudflare** (plan Workers Paid pour Queues)
+- **Modal** (pour le service OCR) - https://modal.com
 - **Twilio** (pour l'envoi d'OTP par SMS) - optionnel en développement
 
 ## Installation Locale
@@ -77,6 +79,55 @@ npm install -g expo-cli
 # Copier la configuration
 cp app.config.example.js app.config.js
 ```
+
+### 6. Configuration Modal-OCR (Service OCR)
+
+Le service OCR multi-moteurs est déployé sur Modal. Pour le développement local :
+
+```bash
+cd packages/modal-ocr
+
+# Créer un environnement virtuel Python
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# ou: venv\Scripts\activate  # Windows
+
+# Installer les dépendances de base
+pip install -r requirements/base.txt
+
+# Installer les moteurs OCR (au choix)
+pip install -r requirements/paddleocr.txt   # PaddleOCR (recommandé)
+pip install -r requirements/surya.txt       # SuryaOCR + Docling (GPU)
+pip install -r requirements/easyocr.txt     # EasyOCR
+pip install -r requirements/tesseract.txt   # Tesseract
+
+# Ou tout installer
+pip install -r requirements/all.txt
+
+# Vérifier l'installation
+python main.py --list-engines
+python main.py --device-info
+```
+
+#### Prérequis Modal (déploiement)
+
+| Logiciel | Version | Vérification |
+|----------|---------|--------------|
+| Python | 3.10+ | `python --version` |
+| Modal CLI | Latest | `modal --version` |
+
+```bash
+# Installer Modal CLI
+pip install modal
+
+# S'authentifier
+modal token new
+
+# Créer le volume pour le cache
+modal volume create scanfactory-model-cache
+```
+
+Voir [MODAL-OCR.md](MODAL-OCR.md) pour la documentation complète.
 
 ## Lancement en Développement
 
@@ -207,6 +258,9 @@ cd packages/web && npm test
 
 # scan-lib
 cd packages/scan-lib && npm test
+
+# modal-ocr
+cd packages/modal-ocr && python -m pytest tests/
 ```
 
 ### Tests avec couverture
@@ -278,9 +332,18 @@ scanfactory/
 │   ├── mobile/
 │   │   ├── app.config.js    # Config Expo
 │   │   └── eas.json         # Config EAS Build
-│   └── scan-lib/
-│       ├── tsconfig.json
-│       └── package.json
+│   ├── scan-lib/
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   └── modal-ocr/           # Service OCR Multi-moteurs
+│       ├── app.py           # Modal application
+│       ├── main.py          # CLI entry point
+│       ├── config/
+│       │   └── ocr_config.yaml
+│       ├── engines/         # Moteurs OCR
+│       ├── requirements/    # Dépendances Python
+│       ├── Dockerfile
+│       └── docker-compose.yml
 └── .github/
     └── workflows/           # CI/CD GitHub Actions
 ```
@@ -290,4 +353,5 @@ scanfactory/
 1. [Déployer en production](DEPLOYMENT.md)
 2. [Consulter la documentation API](API.md)
 3. [Comprendre l'architecture](ARCHITECTURE.md)
-4. [Contribuer au projet](CONTRIBUTING.md)
+4. [Configurer le service OCR](MODAL-OCR.md)
+5. [Contribuer au projet](CONTRIBUTING.md)

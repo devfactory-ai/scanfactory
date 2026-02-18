@@ -254,72 +254,105 @@ Vérifier que `CORS_ORIGIN` dans wrangler.toml correspond exactement à l'URL du
 
 ---
 
-## Déploiement Modal (OCR Service)
+## Déploiement Modal (OCR Multi-Moteurs)
 
-Le service OCR avec PaddleOCR et extraction IA est déployé sur [Modal](https://modal.com).
+Le service OCR multi-moteurs est déployé sur [Modal](https://modal.com) avec extraction IA gratuite via Cloudflare Workers AI.
 
 ### Architecture Modal
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Modal Platform                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────────┐    ┌──────────────────┐               │
-│  │   OCRService     │    │ ExtractionService │              │
-│  │   (PaddleOCR)    │───▶│    (Claude AI)    │              │
-│  │   CPU: 2, 4GB    │    │   CPU: 1, 1GB     │              │
-│  └────────┬─────────┘    └────────┬─────────┘               │
-│           │                       │                          │
-│  ┌────────▼───────────────────────▼─────────┐               │
-│  │            Web Endpoints                  │               │
-│  │  /process_ocr  /process_extraction       │               │
-│  │  /process_document  /health              │               │
-│  └──────────────────────────────────────────┘               │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Modal Multi-OCR Platform                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                      OCR Engine Factory                              │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │    │
+│  │  │ PaddleOCR   │  │  SuryaOCR   │  │ HunyuanOCR  │  │  EasyOCR   │  │    │
+│  │  │  CPU: 2     │  │  GPU: T4    │  │  GPU: T4    │  │  CPU: 2    │  │    │
+│  │  │  RAM: 4GB   │  │  RAM: 8GB   │  │  RAM: 8GB   │  │  RAM: 4GB  │  │    │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │    │
+│  └───────────────────────────────┬─────────────────────────────────────┘    │
+│                                  │                                           │
+│  ┌───────────────────────────────▼─────────────────────────────────────┐    │
+│  │                    Web Endpoints                                     │    │
+│  │        POST /process_ocr     GET /health     GET /list_engines      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                  │                                           │
+└──────────────────────────────────┼───────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Cloudflare Workers AI (Extraction)                        │
+│                         Llama 3.1 / Mistral / Qwen                          │
+│                              (GRATUIT)                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Moteurs OCR disponibles
+
+| Moteur | GPU | Description | Cas d'usage |
+|--------|-----|-------------|-------------|
+| **PaddleOCR** | Non | Haute précision, layout detection | Batch processing |
+| **SuryaOCR** | Oui | Document understanding avec Docling | PDFs complexes |
+| **HunyuanOCR** | Oui | VLM 1B paramètres, state-of-the-art | Haute précision |
+| **EasyOCR** | Non | Simple et rapide | Setup rapide |
+| **Tesseract** | Non | Classique, léger | Ressources limitées |
 
 ### Prérequis Modal
 
 1. **Compte Modal** : https://modal.com
 2. **Modal CLI** : `pip install modal`
 3. **Authentification** : `modal token new`
-4. **Clé API Anthropic** pour l'extraction IA
 
 ### Configuration Modal
 
 ```bash
 cd packages/modal-ocr
 
-# Créer le secret Anthropic
-modal secret create anthropic-api-key ANTHROPIC_API_KEY=sk-ant-xxx
-
 # Créer le volume pour le cache des modèles
 modal volume create scanfactory-model-cache
+
+# (Optionnel) Vérifier la configuration
+modal volume list
 ```
 
 ### Déploiement Modal
 
 ```bash
-# Méthode 1: Script automatique
-./deploy.sh
+cd packages/modal-ocr
 
-# Méthode 2: Commande directe
+# Déploiement production
 modal deploy app.py
 
 # Mode développement (hot reload)
 modal serve app.py
+
+# Vérifier le déploiement
+curl https://devfactory-ai--scanfactory-ocr-health.modal.run
 ```
 
 ### Endpoints Modal
 
-| Endpoint | URL |
-|----------|-----|
-| Health | `https://devfactory-ai--scanfactory-ocr-health.modal.run` |
-| OCR | `https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run` |
-| Extraction | `https://devfactory-ai--scanfactory-ocr-process-extraction.modal.run` |
-| Pipeline complète | `https://devfactory-ai--scanfactory-ocr-process-document.modal.run` |
+| Endpoint | Méthode | URL |
+|----------|---------|-----|
+| Health | GET | `https://devfactory-ai--scanfactory-ocr-health.modal.run` |
+| List Engines | GET | `https://devfactory-ai--scanfactory-ocr-list-engines.modal.run` |
+| Process OCR | POST | `https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run` |
+
+### Exemple d'appel API
+
+```bash
+# OCR avec PaddleOCR (défaut)
+curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
+  -H "Content-Type: application/json" \
+  -d '{"image_url": "https://example.com/document.jpg"}'
+
+# OCR avec SuryaOCR (GPU)
+curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
+  -H "Content-Type: application/json" \
+  -d '{"image_url": "https://example.com/document.jpg", "engine": "surya"}'
+```
 
 ### Intégration Cloudflare ↔ Modal
 
@@ -338,17 +371,46 @@ MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr"
 USE_MODAL_OCR = "true"
 ```
 
+L'extraction des champs structurés utilise Cloudflare Workers AI (gratuit) :
+```toml
+[ai]
+binding = "AI"
+```
+
 ### Monitoring Modal
 
 - **Dashboard** : https://modal.com/apps/scanfactory-ocr
-- **Logs** : Accessibles dans le dashboard Modal
+- **Logs** : `modal logs scanfactory-ocr`
 - **Métriques** : CPU, mémoire, latence par fonction
 
 ### Coûts Modal
 
-| Ressource | Coût estimé |
-|-----------|-------------|
-| OCR (CPU 2 cores, 4GB) | ~$0.0002/sec |
-| Extraction (CPU 1 core, 1GB) | ~$0.00008/sec |
-| Volume storage | ~$0.20/GB/mois |
-| **Pipeline complète** | **~$0.001-0.002/document** |
+| Moteur | Ressources | Coût estimé |
+|--------|------------|-------------|
+| PaddleOCR | CPU 2 cores, 4GB | ~$0.0002/sec |
+| SuryaOCR | GPU T4, 8GB | ~$0.001/sec |
+| HunyuanOCR | GPU T4, 8GB | ~$0.001/sec |
+| EasyOCR | CPU 2 cores, 4GB | ~$0.0002/sec |
+| Workers AI (extraction) | - | **GRATUIT** |
+| Volume storage | - | ~$0.20/GB/mois |
+| **Total par document** | - | **~$0.001-0.005** |
+
+### Déploiement Docker (Alternative)
+
+```bash
+cd packages/modal-ocr
+
+# Build avec GPU
+docker build -t scanfactory-ocr .
+
+# Run avec GPU
+docker run --gpus all \
+  -v $(pwd)/input:/app/input \
+  -v $(pwd)/output:/app/output \
+  scanfactory-ocr --engine surya --batch
+
+# Run CPU only (docker-compose)
+docker-compose --profile cpu up scanfactory-ocr-cpu
+```
+
+Voir [MODAL-OCR.md](MODAL-OCR.md) pour la documentation complète du service OCR.

@@ -34,9 +34,18 @@ ScanFactory est une solution complète pour :
 │  └──────┬───────┘  └──────────────┘  └──────────────────────┘   │
 │         │                                                        │
 │  ┌──────▼───────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │  D1 Database │  │  KV Cache    │  │       Queues         │   │
-│  │  (SQLite)    │  │  (Sessions)  │  │   (Async Processing) │   │
+│  │  D1 Database │  │  KV Cache    │  │    Workers AI        │   │
+│  │  (SQLite)    │  │  (Sessions)  │  │   (Extraction LLM)   │   │
 │  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────┐
+│                    Modal (OCR Service)                           │
+├──────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │ PaddleOCR   │  │  SuryaOCR   │  │ HunyuanOCR  │              │
+│  │   (CPU)     │  │   (GPU)     │  │   (GPU)     │              │
+│  └─────────────┘  └─────────────┘  └─────────────┘              │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -48,6 +57,7 @@ ScanFactory est une solution complète pour :
 | `packages/web` | Application web de validation | React, Vite, TailwindCSS |
 | `packages/mobile` | Application mobile de scan | Expo, React Native |
 | `packages/scan-lib` | Bibliothèque de scan partagée | TypeScript, Tesseract.js |
+| `packages/modal-ocr` | Service OCR multi-moteurs | Python, Modal, PaddleOCR, SuryaOCR |
 
 ## Fonctionnalités
 
@@ -138,6 +148,7 @@ npm run start
 |---------|-----|
 | API | https://scanfactory-api.moka-598.workers.dev |
 | Web | https://scanfactory-web.pages.dev |
+| OCR (Modal) | https://devfactory-ai--scanfactory-ocr-health.modal.run |
 
 Voir [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) pour le guide complet.
 
@@ -145,8 +156,10 @@ Voir [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) pour le guide complet.
 
 | Document | Description |
 |----------|-------------|
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Guide de déploiement Cloudflare |
+| [INSTALLATION.md](docs/INSTALLATION.md) | Guide d'installation |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Guide de déploiement Cloudflare + Modal |
 | [API.md](docs/API.md) | Documentation de l'API REST |
+| [MODAL-OCR.md](docs/MODAL-OCR.md) | Service OCR multi-moteurs |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture technique détaillée |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Guide de contribution |
 
@@ -195,7 +208,7 @@ npm run db:seed          # Insérer les données de test
 ```
 scanfactory/
 ├── packages/
-│   ├── api/                    # Backend API
+│   ├── api/                    # Backend API (Cloudflare Workers)
 │   │   ├── src/
 │   │   │   ├── auth/          # Authentification OTP
 │   │   │   ├── core/          # Logique métier
@@ -207,7 +220,7 @@ scanfactory/
 │   │   │   └── db/            # Schéma et migrations
 │   │   └── wrangler.toml
 │   │
-│   ├── web/                   # Frontend React
+│   ├── web/                   # Frontend React (Cloudflare Pages)
 │   │   ├── src/
 │   │   │   ├── components/    # Composants UI
 │   │   │   ├── pages/         # Pages de l'app
@@ -215,16 +228,28 @@ scanfactory/
 │   │   │   └── lib/           # API client, utils
 │   │   └── vite.config.ts
 │   │
-│   ├── mobile/                # App Expo
+│   ├── mobile/                # App Expo (React Native)
 │   │   └── src/
 │   │       ├── screens/
 │   │       └── components/
 │   │
-│   └── scan-lib/              # Bibliothèque partagée
-│       └── src/
-│           ├── scanner/       # Détection d'edges
-│           ├── processor/     # Traitement d'image
-│           └── ocr/           # Adaptateurs OCR
+│   ├── scan-lib/              # Bibliothèque partagée
+│   │   └── src/
+│   │       ├── scanner/       # Détection d'edges
+│   │       ├── processor/     # Traitement d'image
+│   │       └── ocr/           # Adaptateurs OCR
+│   │
+│   └── modal-ocr/             # Service OCR Multi-moteurs (Modal)
+│       ├── app.py             # Modal application
+│       ├── main.py            # CLI entry point
+│       ├── config/            # Configuration YAML
+│       ├── core/              # Strategy pattern, factory
+│       ├── engines/           # PaddleOCR, SuryaOCR, HunyuanOCR...
+│       ├── utils/             # Hardware detection, converters
+│       ├── tests/             # Tests unitaires
+│       ├── requirements/      # Dépendances Python
+│       ├── Dockerfile
+│       └── docker-compose.yml
 │
 ├── scripts/                   # Scripts de déploiement
 ├── docs/                      # Documentation
