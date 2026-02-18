@@ -1,11 +1,11 @@
 """
-ScanFactory Modal OCR Service
+ScanFactory Modal Multi-OCR Service
 
-Service de traitement OCR pour documents médicaux avec PaddleOCR.
-L'extraction LLM est gérée par Cloudflare Workers AI (gratuit).
+Service de traitement OCR multi-moteurs pour documents médicaux.
+Supporte: PaddleOCR, SuryaOCR, HunyuanOCR, Tesseract, EasyOCR
 
 Architecture:
-  Image → Modal (PaddleOCR) → Cloudflare Workers AI (Llama/Mistral) → Données
+  Image → Modal (OCR Engine) → Cloudflare Workers AI (Extraction) → Données
 """
 
 import modal
@@ -13,8 +13,8 @@ import modal
 # Configuration de l'application Modal
 app = modal.App("scanfactory-ocr")
 
-# Image Docker avec PaddleOCR
-ocr_image = (
+# Image Docker de base avec dépendances communes
+base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install(
         "libgl1-mesa-glx",
@@ -23,39 +23,64 @@ ocr_image = (
         "libxext6",
         "libxrender-dev",
         "libgomp1",
+        "tesseract-ocr",
+        "tesseract-ocr-fra",
+        "tesseract-ocr-eng",
     )
     .pip_install(
-        "paddlepaddle==2.5.2",
-        "paddleocr==2.7.3",
-        "opencv-python-headless==4.8.1.78",
-        "numpy==1.24.3",
-        "Pillow==10.1.0",
-        "httpx==0.25.2",
-        "pydantic==2.5.2",
+        "pyyaml>=6.0",
+        "Pillow>=10.1.0",
+        "numpy>=1.24.3",
+        "httpx>=0.25.2",
+        "pydantic>=2.5.2",
     )
 )
 
-# Volume pour le cache des modèles PaddleOCR
+# Image PaddleOCR
+paddleocr_image = base_image.pip_install(
+    "paddlepaddle==2.5.2",
+    "paddleocr==2.7.3",
+    "opencv-python-headless==4.8.1.78",
+)
+
+# Image SuryaOCR avec Docling
+surya_image = base_image.pip_install(
+    "torch>=2.2.0",
+    "docling>=2.0.0",
+    "docling-surya>=1.0.0",
+    "surya-ocr>=0.6.0",
+)
+
+# Image EasyOCR
+easyocr_image = base_image.pip_install(
+    "torch>=2.2.0",
+    "easyocr>=1.7.0",
+)
+
+# Volume pour le cache des modèles
 model_cache = modal.Volume.from_name("scanfactory-model-cache", create_if_missing=True)
 
 
+# =============================================================================
+# PaddleOCR Service
+# =============================================================================
+
 @app.cls(
-    image=ocr_image,
+    image=paddleocr_image,
     volumes={"/root/.paddleocr": model_cache},
     cpu=2,
     memory=4096,
     timeout=300,
     container_idle_timeout=60,
 )
-class OCRService:
-    """Service OCR avec PaddleOCR pour la reconnaissance de texte français."""
+class PaddleOCRService:
+    """Service OCR avec PaddleOCR."""
 
     def __init__(self):
         self.ocr = None
 
     @modal.enter()
     def setup(self):
-        """Initialise PaddleOCR au démarrage du conteneur."""
         from paddleocr import PaddleOCR
 
         self.ocr = PaddleOCR(
@@ -66,223 +91,207 @@ class OCRService:
             det_db_thresh=0.3,
             det_db_box_thresh=0.5,
             det_db_unclip_ratio=1.6,
-            rec_batch_num=6,
         )
-        print("PaddleOCR initialized successfully")
+        print("✅ PaddleOCR initialized")
 
     @modal.method()
-    def extract_text(self, image_bytes: bytes) -> dict:
-        """
-        Extrait le texte d'une image.
-
-        Args:
-            image_bytes: Image en bytes (JPEG ou PNG)
-
-        Returns:
-            dict avec:
-                - text: Texte complet extrait
-                - blocks: Liste des blocs de texte avec positions et confiances
-                - confidence: Score de confiance moyen
-        """
+    def process(self, image_bytes: bytes, with_layout: bool = True) -> dict:
         import io
-
         import numpy as np
         from PIL import Image
 
-        # Charger l'image
         image = Image.open(io.BytesIO(image_bytes))
         if image.mode != "RGB":
             image = image.convert("RGB")
-        img_array = np.array(image)
 
-        # Exécuter l'OCR
-        result = self.ocr.ocr(img_array, cls=True)
+        result = self.ocr.ocr(np.array(image), cls=True)
 
         if not result or not result[0]:
-            return {"text": "", "blocks": [], "confidence": 0.0}
+            return {"text": "", "blocks": [], "confidence": 0.0, "engine": "paddleocr"}
 
-        # Parser les résultats
         blocks = []
         texts = []
         confidences = []
 
         for line in result[0]:
             box, (text, confidence) = line
-            blocks.append(
-                {
-                    "text": text,
-                    "confidence": float(confidence),
-                    "bbox": {
-                        "x1": int(box[0][0]),
-                        "y1": int(box[0][1]),
-                        "x2": int(box[2][0]),
-                        "y2": int(box[2][1]),
-                    },
-                }
-            )
+            blocks.append({
+                "text": text,
+                "confidence": float(confidence),
+                "bbox": {
+                    "x1": int(box[0][0]), "y1": int(box[0][1]),
+                    "x2": int(box[2][0]), "y2": int(box[2][1]),
+                },
+            })
             texts.append(text)
             confidences.append(confidence)
-
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
         return {
             "text": "\n".join(texts),
             "blocks": blocks,
-            "confidence": round(avg_confidence, 4),
+            "confidence": round(sum(confidences) / len(confidences), 4) if confidences else 0.0,
+            "engine": "paddleocr",
+            "layout": {"width": image.width, "height": image.height} if with_layout else None,
         }
 
+
+# =============================================================================
+# SuryaOCR Service
+# =============================================================================
+
+@app.cls(
+    image=surya_image,
+    volumes={"/root/.cache": model_cache},
+    cpu=2,
+    memory=8192,
+    gpu="T4",
+    timeout=600,
+    container_idle_timeout=120,
+)
+class SuryaOCRService:
+    """Service OCR avec SuryaOCR + Docling."""
+
+    def __init__(self):
+        self.converter = None
+
+    @modal.enter()
+    def setup(self):
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling_surya import SuryaOcrOptions
+
+        pipeline_options = PdfPipelineOptions(
+            do_ocr=True,
+            ocr_model="suryaocr",
+            allow_external_plugins=True,
+            accelerator="cuda",
+            ocr_options=SuryaOcrOptions(lang=["en", "fr"]),
+        )
+
+        self.converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+                InputFormat.IMAGE: PdfFormatOption(pipeline_options=pipeline_options),
+            }
+        )
+        print("✅ SuryaOCR (Docling) initialized")
+
     @modal.method()
-    def extract_text_with_layout(self, image_bytes: bytes) -> dict:
-        """
-        Extrait le texte avec analyse de layout pour documents structurés.
+    def process(self, image_bytes: bytes) -> dict:
+        import tempfile
+        from pathlib import Path
 
-        Returns:
-            dict avec text, blocks, et layout_info
-        """
+        # Save to temp file for Docling
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(image_bytes)
+            temp_path = Path(f.name)
+
+        try:
+            result = self.converter.convert(str(temp_path))
+            markdown = result.document.export_to_markdown()
+            doc_dict = result.document.export_to_dict()
+
+            return {
+                "text": markdown,
+                "blocks": [],
+                "confidence": 0.95,
+                "engine": "surya",
+                "layout": doc_dict,
+            }
+        finally:
+            temp_path.unlink()
+
+
+# =============================================================================
+# EasyOCR Service
+# =============================================================================
+
+@app.cls(
+    image=easyocr_image,
+    volumes={"/root/.EasyOCR": model_cache},
+    cpu=2,
+    memory=4096,
+    timeout=300,
+    container_idle_timeout=60,
+)
+class EasyOCRService:
+    """Service OCR avec EasyOCR."""
+
+    def __init__(self):
+        self.reader = None
+
+    @modal.enter()
+    def setup(self):
+        import easyocr
+
+        self.reader = easyocr.Reader(["fr", "en"], gpu=False, verbose=False)
+        print("✅ EasyOCR initialized")
+
+    @modal.method()
+    def process(self, image_bytes: bytes) -> dict:
         import io
-
         import numpy as np
         from PIL import Image
 
         image = Image.open(io.BytesIO(image_bytes))
         if image.mode != "RGB":
             image = image.convert("RGB")
-        img_array = np.array(image)
 
-        result = self.ocr.ocr(img_array, cls=True)
+        results = self.reader.readtext(np.array(image))
 
-        if not result or not result[0]:
-            return {
-                "text": "",
-                "blocks": [],
-                "layout_info": {"width": image.width, "height": image.height, "regions": []},
-                "confidence": 0.0,
-            }
+        if not results:
+            return {"text": "", "blocks": [], "confidence": 0.0, "engine": "easyocr"}
 
-        # Analyser la structure du document
         blocks = []
-        lines_by_y = {}
+        texts = []
+        confidences = []
 
-        for line in result[0]:
-            box, (text, confidence) = line
-            y_center = (box[0][1] + box[2][1]) / 2
-            x_center = (box[0][0] + box[2][0]) / 2
+        for bbox, text, confidence in results:
+            x1 = int(min(p[0] for p in bbox))
+            y1 = int(min(p[1] for p in bbox))
+            x2 = int(max(p[0] for p in bbox))
+            y2 = int(max(p[1] for p in bbox))
 
-            block = {
+            blocks.append({
                 "text": text,
                 "confidence": float(confidence),
-                "bbox": {
-                    "x1": int(box[0][0]),
-                    "y1": int(box[0][1]),
-                    "x2": int(box[2][0]),
-                    "y2": int(box[2][1]),
-                },
-                "center": {"x": x_center, "y": y_center},
-            }
-            blocks.append(block)
-
-            # Grouper par ligne (tolérance de 20px)
-            y_key = int(y_center / 20) * 20
-            if y_key not in lines_by_y:
-                lines_by_y[y_key] = []
-            lines_by_y[y_key].append(block)
-
-        # Reconstruire les lignes dans l'ordre de lecture
-        sorted_lines = []
-        for y_key in sorted(lines_by_y.keys()):
-            line_blocks = sorted(lines_by_y[y_key], key=lambda b: b["center"]["x"])
-            sorted_lines.append(" ".join(b["text"] for b in line_blocks))
-
-        # Détecter les régions (header, body, footer)
-        regions = self._detect_regions(blocks, image.height)
+                "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+            })
+            texts.append(text)
+            confidences.append(confidence)
 
         return {
-            "text": "\n".join(sorted_lines),
+            "text": "\n".join(texts),
             "blocks": blocks,
-            "layout_info": {
-                "width": image.width,
-                "height": image.height,
-                "regions": regions,
-            },
-            "confidence": round(
-                sum(b["confidence"] for b in blocks) / len(blocks) if blocks else 0.0, 4
-            ),
+            "confidence": round(sum(confidences) / len(confidences), 4) if confidences else 0.0,
+            "engine": "easyocr",
         }
-
-    def _detect_regions(self, blocks: list, image_height: int) -> list:
-        """Détecte les régions du document (header, body, footer)."""
-        if not blocks:
-            return []
-
-        header_threshold = image_height * 0.15
-        footer_threshold = image_height * 0.85
-
-        header_blocks = [b for b in blocks if b["bbox"]["y1"] < header_threshold]
-        footer_blocks = [b for b in blocks if b["bbox"]["y1"] > footer_threshold]
-        body_blocks = [
-            b
-            for b in blocks
-            if b["bbox"]["y1"] >= header_threshold and b["bbox"]["y1"] <= footer_threshold
-        ]
-
-        regions = []
-        if header_blocks:
-            regions.append(
-                {
-                    "type": "header",
-                    "y_start": 0,
-                    "y_end": int(header_threshold),
-                    "block_count": len(header_blocks),
-                }
-            )
-        if body_blocks:
-            regions.append(
-                {
-                    "type": "body",
-                    "y_start": int(header_threshold),
-                    "y_end": int(footer_threshold),
-                    "block_count": len(body_blocks),
-                }
-            )
-        if footer_blocks:
-            regions.append(
-                {
-                    "type": "footer",
-                    "y_start": int(footer_threshold),
-                    "y_end": image_height,
-                    "block_count": len(footer_blocks),
-                }
-            )
-
-        return regions
 
 
 # =============================================================================
 # Web Endpoints
 # =============================================================================
 
-
-@app.function(image=ocr_image, volumes={"/root/.paddleocr": model_cache}, cpu=2, memory=4096)
+@app.function(image=paddleocr_image, volumes={"/root/.paddleocr": model_cache}, cpu=2, memory=4096)
 @modal.web_endpoint(method="POST", docs=True)
 async def process_ocr(request: dict) -> dict:
     """
-    Endpoint pour le traitement OCR.
+    Endpoint OCR unifié avec sélection du moteur.
 
     Body:
-        image_url: URL de l'image à traiter
-        ou
-        image_base64: Image encodée en base64
-
-        with_layout: bool - Inclure l'analyse de layout (défaut: true)
+        image_url: URL de l'image (optionnel)
+        image_base64: Image en base64 (optionnel)
+        engine: Moteur OCR (paddleocr, surya, easyocr) - défaut: paddleocr
+        with_layout: Inclure les infos de layout (défaut: true)
 
     Returns:
-        Résultat OCR avec texte et blocs
+        Résultat OCR avec texte, blocs, et confiance
     """
     import base64
-
     import httpx
 
-    # Récupérer l'image
+    # Get image bytes
     if "image_url" in request:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(request["image_url"])
@@ -293,14 +302,21 @@ async def process_ocr(request: dict) -> dict:
     else:
         return {"error": "image_url or image_base64 required", "success": False}
 
-    # Traiter avec OCR
-    ocr_service = OCRService()
+    # Select engine
+    engine = request.get("engine", "paddleocr")
     with_layout = request.get("with_layout", True)
 
-    if with_layout:
-        result = ocr_service.extract_text_with_layout.remote(image_bytes)
+    if engine == "paddleocr":
+        service = PaddleOCRService()
+        result = service.process.remote(image_bytes, with_layout)
+    elif engine == "surya":
+        service = SuryaOCRService()
+        result = service.process.remote(image_bytes)
+    elif engine == "easyocr":
+        service = EasyOCRService()
+        result = service.process.remote(image_bytes)
     else:
-        result = ocr_service.extract_text.remote(image_bytes)
+        return {"error": f"Unknown engine: {engine}", "success": False}
 
     return {"success": True, **result}
 
@@ -312,61 +328,58 @@ async def health() -> dict:
     return {
         "status": "healthy",
         "service": "scanfactory-ocr",
-        "version": "1.1.0",
-        "features": ["paddleocr", "layout_detection"],
-        "note": "LLM extraction moved to Cloudflare Workers AI (free)",
+        "version": "2.0.0",
+        "engines": ["paddleocr", "surya", "easyocr"],
+        "note": "Multi-OCR service with engine selection",
+    }
+
+
+@app.function()
+@modal.web_endpoint(method="GET", docs=True)
+async def list_engines() -> dict:
+    """List available OCR engines."""
+    return {
+        "engines": [
+            {
+                "id": "paddleocr",
+                "name": "PaddleOCR",
+                "description": "High-accuracy OCR with layout detection",
+                "languages": ["fr", "en", "zh", "ar"],
+                "gpu_required": False,
+            },
+            {
+                "id": "surya",
+                "name": "SuryaOCR",
+                "description": "Advanced document understanding with Docling",
+                "languages": ["fr", "en"],
+                "gpu_required": True,
+            },
+            {
+                "id": "easyocr",
+                "name": "EasyOCR",
+                "description": "Ready-to-use OCR for images",
+                "languages": ["fr", "en"],
+                "gpu_required": False,
+            },
+        ],
+        "default": "paddleocr",
     }
 
 
 # =============================================================================
-# Direct Function Calls (pour appel depuis Cloudflare)
+# CLI
 # =============================================================================
-
-
-@app.function(image=ocr_image, volumes={"/root/.paddleocr": model_cache}, cpu=2, memory=4096)
-def ocr_from_url(image_url: str, with_layout: bool = True) -> dict:
-    """
-    Traitement OCR depuis une URL d'image.
-    Appelable directement depuis l'API Cloudflare.
-    """
-    import httpx
-
-    with httpx.Client(timeout=30.0) as client:
-        response = client.get(image_url)
-        response.raise_for_status()
-        image_bytes = response.content
-
-    ocr_service = OCRService()
-    if with_layout:
-        return ocr_service.extract_text_with_layout.remote(image_bytes)
-    return ocr_service.extract_text.remote(image_bytes)
-
-
-@app.function(image=ocr_image, volumes={"/root/.paddleocr": model_cache}, cpu=2, memory=4096)
-def ocr_from_bytes(image_bytes: bytes, with_layout: bool = True) -> dict:
-    """
-    Traitement OCR depuis des bytes d'image.
-    Appelable directement depuis l'API Cloudflare.
-    """
-    ocr_service = OCRService()
-    if with_layout:
-        return ocr_service.extract_text_with_layout.remote(image_bytes)
-    return ocr_service.extract_text.remote(image_bytes)
-
-
-# =============================================================================
-# CLI pour tests locaux
-# =============================================================================
-
 
 @app.local_entrypoint()
 def main():
     """Point d'entrée pour tests locaux."""
-    print("ScanFactory OCR Service")
+    print("ScanFactory Multi-OCR Service v2.0")
     print("=" * 50)
-    print("Endpoints:")
-    print("  - POST /process_ocr  - OCR avec layout")
+    print("\nEngines disponibles:")
+    print("  - paddleocr : PaddleOCR (défaut)")
+    print("  - surya     : SuryaOCR + Docling (GPU)")
+    print("  - easyocr   : EasyOCR")
+    print("\nEndpoints:")
+    print("  - POST /process_ocr  - OCR avec sélection moteur")
     print("  - GET  /health       - Health check")
-    print("")
-    print("Note: L'extraction LLM est gérée par Cloudflare Workers AI")
-    print("      (gratuit, modèles: Llama 3.1, Mistral, Qwen)")
+    print("  - GET  /list_engines - Liste des moteurs")

@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  scanfactory-ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_PADDLEOCR: "true"
+        INSTALL_SURYA: "true"
+        INSTALL_EASYOCR: "true"
+        INSTALL_GPU: "true"
+
+    image: scanfactory-ocr:latest
+    container_name: scanfactory-ocr
+
+    # GPU support (NVIDIA)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./config:/app/config
+
+    environment:
+      - OCR_DEFAULT_ENGINE=surya
+      - OCR_DEVICE=auto
+      - PYTHONUNBUFFERED=1
+
+    command: ["--input", "/app/input", "--batch", "--engine", "surya", "--formats", "markdown", "json"]
+
+  # CPU-only version (no GPU)
+  scanfactory-ocr-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_PADDLEOCR: "true"
+        INSTALL_SURYA: "true"
+        INSTALL_EASYOCR: "true"
+        INSTALL_GPU: "false"
+
+    image: scanfactory-ocr:cpu
+    container_name: scanfactory-ocr-cpu
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+
+    environment:
+      - OCR_DEFAULT_ENGINE=paddleocr
+      - OCR_DEVICE=cpu
+
+    profiles:
+      - cpu

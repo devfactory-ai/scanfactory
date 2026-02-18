@@ -1,0 +1,6 @@
+# HunyuanOCR dependencies
+# Note: HunyuanOCR may need to be installed from GitHub
+# git+https://github.com/tencent/HunyuanOCR.git
+transformers>=4.36.0
+accelerate>=0.25.0
+sentencepiece>=0.1.99

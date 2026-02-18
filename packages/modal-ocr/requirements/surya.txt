@@ -1,0 +1,4 @@
+# SuryaOCR with Docling dependencies
+docling>=2.0.0
+docling-surya>=1.0.0
+surya-ocr>=0.6.0

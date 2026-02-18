@@ -1,0 +1,12 @@
+# All dependencies for full installation
+-r base.txt
+-r paddleocr.txt
+-r surya.txt
+-r tesseract.txt
+-r easyocr.txt
+
+# Note: HunyuanOCR requires separate installation from GitHub
+# See requirements/hunyuan.txt
+
+# For GPU support, also install:
+# pip install -r requirements/gpu.txt

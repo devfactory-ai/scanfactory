@@ -1,0 +1,4 @@
+# Tesseract OCR dependencies
+# Note: Requires system installation of tesseract-ocr
+# apt-get install tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng
+pytesseract>=0.3.10

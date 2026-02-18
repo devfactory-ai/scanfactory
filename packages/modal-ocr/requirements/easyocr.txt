@@ -1,0 +1,2 @@
+# EasyOCR dependencies
+easyocr>=1.7.0

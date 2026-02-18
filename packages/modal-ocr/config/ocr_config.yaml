@@ -1,0 +1,62 @@
+ocr:
+  # Moteur par défaut: paddleocr, tesseract, easyocr, hunyuan, surya
+  default_engine: "surya"
+
+  # Répertoire de sortie
+  output_dir: "./output"
+
+  # Configuration par moteur
+  engines:
+    paddleocr:
+      enabled: true
+      device: "auto"  # auto, cuda, mps, cpu
+      languages: ["fr", "en"]
+      det_db_thresh: 0.3
+      det_db_box_thresh: 0.5
+      det_db_unclip_ratio: 1.6
+      rec_batch_num: 6
+
+    tesseract:
+      enabled: true
+      lang: "fra+eng"
+      config: "--psm 3"
+
+    easyocr:
+      enabled: true
+      languages: ["fr", "en"]
+      gpu: true
+
+    hunyuan:
+      enabled: true
+      device: "auto"  # auto, cuda, mps, cpu
+      languages: ["en", "fr", "ar", "zh"]
+      tasks:
+        - detection
+        - parsing
+        - layout
+        - reading_order
+      batch_size: 32
+      memory_cleanup: true
+
+    surya:
+      enabled: true
+      device: "auto"
+      languages: ["en", "fr"]
+      pipeline_options:
+        do_ocr: true
+        allow_external_plugins: true
+      memory_cleanup: true
+
+  # Options de sortie
+  output:
+    formats:
+      - markdown
+      - json
+    preserve_layout: true
+    include_metadata: true
+
+  # Performance
+  performance:
+    batch_processing: true
+    max_workers: 4
+    memory_cleanup: true  # Vider cache GPU après chaque doc

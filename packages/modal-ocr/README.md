@@ -1,41 +1,98 @@
-# ScanFactory Modal OCR Service
+# ScanFactory Multi-OCR Service
 
-Service de traitement OCR pour documents médicaux avec PaddleOCR, déployé sur [Modal](https://modal.com).
+Service de traitement OCR multi-moteurs pour documents médicaux, déployé sur [Modal](https://modal.com).
 
-> **Note**: L'extraction LLM est gérée par Cloudflare Workers AI (gratuit) avec des modèles open-source comme Llama 3.1 et Mistral.
+## Moteurs OCR disponibles
+
+| Moteur | Description | GPU | Langues |
+|--------|-------------|-----|---------|
+| **PaddleOCR** | OCR haute précision | Non | 90+ |
+| **SuryaOCR** | Document understanding avec Docling | Oui | 90+ |
+| **HunyuanOCR** | VLM 1B paramètres (state-of-the-art) | Oui | 90+ |
+| **EasyOCR** | OCR simple et rapide | Non | 80+ |
+| **Tesseract** | OCR classique | Non | 100+ |
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Pipeline Complète                               │
+│                         ScanFactory Multi-OCR                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌─────────┐     ┌──────────────────┐     ┌─────────────────────────────┐  │
-│  │  Image  │────▶│  Modal           │────▶│  Cloudflare Workers AI      │  │
-│  │  (scan) │     │  (PaddleOCR)     │     │  (Llama 3.1 / Mistral)      │  │
-│  └─────────┘     │                  │     │                             │  │
-│                  │  - OCR français  │     │  - Extraction structurée    │  │
-│                  │  - Layout detect │     │  - bulletin_soin, facture   │  │
-│                  │  - ~$0.001/doc   │     │  - GRATUIT                  │  │
-│                  └──────────────────┘     └─────────────────────────────┘  │
+│  ┌─────────┐     ┌───────────────────────────────────────────────────────┐ │
+│  │  Image  │────▶│                OCR Engine Factory                     │ │
+│  │  (scan) │     └───────────────────────┬───────────────────────────────┘ │
+│  └─────────┘                             │                                  │
+│                      ┌───────────────────┼───────────────────┐             │
+│                      │                   │                   │             │
+│                      ▼                   ▼                   ▼             │
+│               ┌──────────┐        ┌──────────┐        ┌──────────┐        │
+│               │PaddleOCR │        │ SuryaOCR │        │ EasyOCR  │        │
+│               │  (CPU)   │        │  (GPU)   │        │  (CPU)   │        │
+│               └──────────┘        └──────────┘        └──────────┘        │
+│                      │                   │                   │             │
+│                      └───────────────────┼───────────────────┘             │
+│                                          │                                  │
+│                                          ▼                                  │
+│                              ┌──────────────────────┐                      │
+│                              │  Cloudflare Workers  │                      │
+│                              │    AI (Extraction)   │                      │
+│                              │      (GRATUIT)       │                      │
+│                              └──────────────────────┘                      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Fonctionnalités
+## Installation
 
-- **OCR haute précision** avec PaddleOCR (support français natif)
-- **Détection de layout** pour documents structurés (header, body, footer)
-- **Scalabilité automatique** avec Modal
-- **Cache des modèles** pour démarrages rapides
-
-## Prérequis
+### Prérequis
 
 - Python 3.10+
-- Compte [Modal](https://modal.com) (gratuit pour démarrer)
+- Compte [Modal](https://modal.com)
 
-## Installation
+### Installation locale
+
+```bash
+cd packages/modal-ocr
+
+# Créer un environnement virtuel
+python -m venv venv
+source venv/bin/activate
+
+# Installer les dépendances de base
+pip install -r requirements/base.txt
+
+# Installer les moteurs OCR souhaités
+pip install -r requirements/paddleocr.txt
+pip install -r requirements/surya.txt
+pip install -r requirements/easyocr.txt
+
+# Support GPU (optionnel)
+pip install -r requirements/gpu.txt
+```
+
+## Utilisation
+
+### CLI locale
+
+```bash
+# Document unique avec SuryaOCR
+python main.py --input ./docs/sample.pdf --engine surya --formats markdown json
+
+# Batch processing avec PaddleOCR
+python main.py --input ./docs/ --engine paddleocr --batch
+
+# Utiliser le moteur par défaut (config)
+python main.py --input ./docs/invoice.pdf
+
+# Lister les moteurs disponibles
+python main.py --list-engines
+
+# Afficher les infos device (GPU/CPU)
+python main.py --device-info
+```
+
+### Déploiement Modal
 
 ```bash
 # Installer Modal CLI
@@ -44,22 +101,6 @@ pip install modal
 # S'authentifier
 modal token new
 
-# Naviguer vers le package
-cd packages/modal-ocr
-```
-
-## Déploiement
-
-### Méthode simple
-
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
-
-### Méthode manuelle
-
-```bash
 # Créer le volume pour le cache
 modal volume create scanfactory-model-cache
 
@@ -67,130 +108,148 @@ modal volume create scanfactory-model-cache
 modal deploy app.py
 ```
 
-## Endpoints
-
-| Endpoint | Méthode | Description |
-|----------|---------|-------------|
-| `/health` | GET | Health check |
-| `/process_ocr` | POST | Traitement OCR |
-
-### URL de base
-
-```
-https://devfactory-ai--scanfactory-ocr-{endpoint}.modal.run
-```
-
-## Utilisation
-
-### OCR simple
+### API Modal
 
 ```bash
+# OCR avec PaddleOCR (défaut)
+curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://example.com/document.jpg"
+  }'
+
+# OCR avec SuryaOCR
 curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
   -H "Content-Type: application/json" \
   -d '{
     "image_url": "https://example.com/document.jpg",
-    "with_layout": true
+    "engine": "surya"
   }'
+
+# Lister les moteurs
+curl https://devfactory-ai--scanfactory-ocr-list-engines.modal.run
 ```
 
-### Réponse
-
-```json
-{
-  "success": true,
-  "text": "BULLETIN DE SOINS\nPatient: DUPONT Jean\n...",
-  "blocks": [
-    {
-      "text": "BULLETIN DE SOINS",
-      "confidence": 0.98,
-      "bbox": {"x1": 100, "y1": 50, "x2": 400, "y2": 80}
-    }
-  ],
-  "layout_info": {
-    "width": 800,
-    "height": 1200,
-    "regions": [
-      {"type": "header", "y_start": 0, "y_end": 180, "block_count": 3},
-      {"type": "body", "y_start": 180, "y_end": 1020, "block_count": 25},
-      {"type": "footer", "y_start": 1020, "y_end": 1200, "block_count": 2}
-    ]
-  },
-  "confidence": 0.95
-}
-```
-
-### Avec image base64
+### Docker
 
 ```bash
-curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image_base64": "'$(base64 -i document.jpg)'"
-  }'
+# Build
+docker build -t scanfactory-ocr .
+
+# Run avec GPU
+docker run --gpus all \
+  -v $(pwd)/input:/app/input \
+  -v $(pwd)/output:/app/output \
+  scanfactory-ocr --engine surya
+
+# Run CPU only
+docker-compose --profile cpu up scanfactory-ocr-cpu
 ```
 
-## Intégration avec Cloudflare
+## Configuration
 
-Le flux complet utilise Modal pour l'OCR et Cloudflare Workers AI pour l'extraction:
+### `config/ocr_config.yaml`
 
-```typescript
-// 1. OCR avec Modal
-const ocrResult = await modalAdapter.ocr(imageUrl);
+```yaml
+ocr:
+  default_engine: "surya"
 
-// 2. Extraction avec Workers AI (gratuit)
-const extractor = new WorkersAIExtractor(env);
-const extracted = await extractor.extractBulletinSoin(ocrResult.text);
+  engines:
+    paddleocr:
+      enabled: true
+      device: "auto"
+      languages: ["fr", "en"]
+
+    surya:
+      enabled: true
+      device: "auto"
+      languages: ["en", "fr"]
+      pipeline_options:
+        do_ocr: true
+
+    hunyuan:
+      enabled: true
+      device: "auto"
+      languages: ["en", "fr", "zh"]
+      tasks: ["detection", "parsing", "layout"]
+
+  output:
+    formats: ["markdown", "json"]
 ```
 
-Configuration `wrangler.toml`:
-```toml
-[vars]
-MODAL_OCR_URL = "https://devfactory-ai--scanfactory-ocr"
+## Structure du projet
 
-[ai]
-binding = "AI"
+```
+packages/modal-ocr/
+├── app.py                  # Modal application
+├── main.py                 # CLI entry point
+├── config/
+│   ├── ocr_config.yaml     # Configuration
+│   └── settings.py         # Config loader
+├── core/
+│   ├── ocr_strategy.py     # Strategy interface
+│   ├── ocr_factory.py      # Engine factory
+│   └── document_processor.py
+├── engines/
+│   ├── base_engine.py      # Base class
+│   ├── paddleocr_engine.py
+│   ├── surya_engine.py
+│   ├── hunyuan_engine.py
+│   ├── tesseract_engine.py
+│   └── easyocr_engine.py
+├── utils/
+│   ├── hardware_detector.py
+│   ├── format_converter.py
+│   └── logger.py
+├── tests/
+├── requirements/
+│   ├── base.txt
+│   ├── paddleocr.txt
+│   ├── surya.txt
+│   ├── hunyuan.txt
+│   └── gpu.txt
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-## Développement local
+## Comparaison des moteurs
 
-```bash
-# Mode développement (hot reload)
-modal serve app.py
+| Critère | PaddleOCR | SuryaOCR | HunyuanOCR | Tesseract | EasyOCR |
+|---------|-----------|----------|------------|-----------|---------|
+| **Précision** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **Vitesse CPU** | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Vitesse GPU** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | N/A | ⭐⭐⭐⭐ |
+| **Layout** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
+| **Tables** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ |
+| **Handwriting** | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
+| **Taille modèle** | ~100MB | ~500MB | ~1GB | ~10MB | ~100MB |
 
-# Tester une fonction
-modal run app.py::health
-```
+## Recommandations
+
+- **Documents PDF/Images structurés** → SuryaOCR
+- **Production haute précision** → HunyuanOCR
+- **Batch processing rapide** → PaddleOCR
+- **Ressources limitées** → Tesseract
+- **Setup rapide** → EasyOCR
 
 ## Coûts
 
 | Service | Coût |
 |---------|------|
-| Modal OCR | ~$0.0002/sec (~$0.001/doc) |
-| Workers AI | **GRATUIT** |
-| **Total** | **~$0.001/document** |
+| Modal (PaddleOCR) | ~$0.0002/sec |
+| Modal (SuryaOCR GPU) | ~$0.001/sec |
+| Workers AI (extraction) | **GRATUIT** |
+| **Total par document** | **~$0.001-0.005** |
 
-## Monitoring
-
-- **Dashboard Modal**: https://modal.com/apps/scanfactory-ocr
-- **Logs**: Accessibles dans le dashboard
-- **Métriques**: CPU, mémoire, latence
-
-## Troubleshooting
-
-### Erreur "Volume not found"
+## Tests
 
 ```bash
-modal volume create scanfactory-model-cache
-```
+# Tous les tests
+python -m pytest tests/
 
-### Premier appel lent
+# Tests avec couverture
+python -m pytest tests/ --cov=.
 
-Les modèles PaddleOCR sont téléchargés au premier appel (~30-60 sec).
-Les appels suivants sont rapides grâce au cache.
-
-### Timeout
-
-Augmenter le timeout dans `app.py`:
-```python
-@app.cls(..., timeout=600)  # 10 minutes
+# Tests d'un moteur spécifique
+python -m pytest tests/test_surya.py
 ```
