@@ -2,6 +2,8 @@ import { Hono, type Context } from 'hono';
 import { createCorsMiddleware } from './middleware/cors';
 import { csrfProtection, csrfTokenEndpoint } from './middleware/csrf';
 import { requestLogging } from './middleware/logging';
+import { apiRateLimit, uploadRateLimit } from './middleware/rateLimit';
+import { securityHeaders } from './middleware/security';
 import { authRoutes } from './auth/routes';
 import { extractionRoutes } from './core/extraction/routes';
 import { validationRoutes } from './core/validation/routes';
@@ -24,6 +26,7 @@ export interface Env {
   JWT_SECRET: string;
   MODAL_OCR_URL?: string; // Modal OCR service URL
   USE_MODAL_OCR?: string; // 'true' to use Modal OCR service
+  MODAL_HMAC_SECRET?: string; // HMAC secret for Modal authentication
   ALLOWED_ORIGINS?: string; // Comma-separated list of allowed CORS origins
   ENVIRONMENT?: 'development' | 'staging' | 'production';
 }
@@ -33,10 +36,33 @@ const app = new Hono<{ Bindings: Env }>();
 // Request logging and tracing (must be first to capture all requests)
 app.use('*', requestLogging());
 
+// Validate required secrets at startup (fail fast)
+app.use('*', async (c, next) => {
+  // SEC-05: Validate JWT_SECRET in production
+  if (c.env.ENVIRONMENT === 'production') {
+    if (!c.env.JWT_SECRET || c.env.JWT_SECRET.length < 32) {
+      console.error(JSON.stringify({
+        type: 'security_error',
+        message: 'JWT_SECRET must be set and at least 32 characters in production',
+        timestamp: new Date().toISOString(),
+      }));
+      return c.json({ error: 'Server configuration error' }, 500);
+    }
+  }
+  await next();
+});
+
 // Global middleware - CORS with environment-based origins
 app.use('*', async (c, next) => {
-  const corsHandler = createCorsMiddleware(c.env.ALLOWED_ORIGINS);
+  const isProduction = c.env.ENVIRONMENT === 'production';
+  const corsHandler = createCorsMiddleware(c.env.ALLOWED_ORIGINS, isProduction);
   return corsHandler(c, next);
+});
+
+// SEC-07: Security headers (CSP, X-Frame-Options, etc.)
+app.use('*', async (c, next) => {
+  const secHeaders = securityHeaders({ environment: c.env.ENVIRONMENT });
+  return secHeaders(c, next);
 });
 
 // Error handling
@@ -64,6 +90,24 @@ app.use('/api/*', async (c, next) => {
 
 // CSRF token endpoint for SPAs
 app.get('/api/csrf-token', csrfTokenEndpoint());
+
+// SEC-04: Global rate limiting for all API endpoints
+// 100 requests per minute per IP (except auth which has stricter limits)
+app.use('/api/*', async (c, next) => {
+  // Skip rate limiting for health checks
+  if (c.req.path === '/api/health' || c.req.path === '/api/version') {
+    return next();
+  }
+  // Skip for auth routes (they have their own stricter limits)
+  if (c.req.path.startsWith('/api/auth') || c.req.path.startsWith('/api/v1/auth')) {
+    return next();
+  }
+  return apiRateLimit(c, next);
+});
+
+// Stricter rate limiting for upload endpoints
+app.use('/api/*/documents', uploadRateLimit);
+app.use('/api/documents', uploadRateLimit);
 
 // Health check
 app.get('/', (c) => {

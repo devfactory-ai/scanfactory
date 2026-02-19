@@ -7,6 +7,8 @@ import type { ExtractionResult, FieldExtraction } from './adapter';
 interface ModalConfig {
   baseUrl: string;
   timeout?: number;
+  /** Secret for HMAC signature (optional, but recommended in production) */
+  hmacSecret?: string;
 }
 
 /**
@@ -65,6 +67,33 @@ const INITIAL_BACKOFF_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 60000; // 1 minute
 
 /**
+ * Generate HMAC-SHA256 signature for request authentication
+ * SEC-06: Authenticate requests to Modal service
+ */
+async function generateHMACSignature(
+  body: string,
+  timestamp: string,
+  secret: string
+): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const data = `${timestamp}.${body}`;
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
+
+  // Convert to hex string
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
  * Adapter pour le service OCR/Extraction sur Modal
  */
 export class ModalOCRAdapter {
@@ -76,7 +105,28 @@ export class ModalOCRAdapter {
     this.config = {
       baseUrl: env.MODAL_OCR_URL || 'https://devfactory-ai--scanfactory-ocr',
       timeout: DEFAULT_TIMEOUT_MS,
+      hmacSecret: env.MODAL_HMAC_SECRET,
     };
+  }
+
+  /**
+   * Build authenticated headers for Modal requests
+   */
+  private async buildAuthHeaders(body: string): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // Add HMAC signature if secret is configured
+    if (this.config.hmacSecret) {
+      const timestamp = Date.now().toString();
+      const signature = await generateHMACSignature(body, timestamp, this.config.hmacSecret);
+
+      headers['X-Modal-Timestamp'] = timestamp;
+      headers['X-Modal-Signature'] = signature;
+    }
+
+    return headers;
   }
 
   /**
@@ -84,14 +134,15 @@ export class ModalOCRAdapter {
    */
   async ocr(imageUrl: string, withLayout: boolean = true): Promise<ModalOCRResponse> {
     const endpoint = `${this.config.baseUrl}-process-ocr.modal.run`;
+    const body = JSON.stringify({
+      image_url: imageUrl,
+      with_layout: withLayout,
+    });
 
     const response = await this.fetchWithRetry(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_url: imageUrl,
-        with_layout: withLayout,
-      }),
+      headers: await this.buildAuthHeaders(body),
+      body,
     });
 
     return response as ModalOCRResponse;
@@ -102,14 +153,15 @@ export class ModalOCRAdapter {
    */
   async ocrFromBase64(imageBase64: string, withLayout: boolean = true): Promise<ModalOCRResponse> {
     const endpoint = `${this.config.baseUrl}-process-ocr.modal.run`;
+    const body = JSON.stringify({
+      image_base64: imageBase64,
+      with_layout: withLayout,
+    });
 
     const response = await this.fetchWithRetry(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_base64: imageBase64,
-        with_layout: withLayout,
-      }),
+      headers: await this.buildAuthHeaders(body),
+      body,
     });
 
     return response as ModalOCRResponse;
@@ -120,15 +172,16 @@ export class ModalOCRAdapter {
    */
   async extract(ocrText: string, pipeline: string, ocrBlocks?: unknown[]): Promise<ModalExtractionResponse> {
     const endpoint = `${this.config.baseUrl}-process-extraction.modal.run`;
+    const body = JSON.stringify({
+      ocr_text: ocrText,
+      ocr_blocks: ocrBlocks || [],
+      pipeline,
+    });
 
     const response = await this.fetchWithRetry(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ocr_text: ocrText,
-        ocr_blocks: ocrBlocks || [],
-        pipeline,
-      }),
+      headers: await this.buildAuthHeaders(body),
+      body,
     });
 
     return response as ModalExtractionResponse;
@@ -139,14 +192,15 @@ export class ModalOCRAdapter {
    */
   async processDocument(imageUrl: string, pipeline: string): Promise<ModalDocumentResponse> {
     const endpoint = `${this.config.baseUrl}-process-document.modal.run`;
+    const body = JSON.stringify({
+      image_url: imageUrl,
+      pipeline,
+    });
 
     const response = await this.fetchWithRetry(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_url: imageUrl,
-        pipeline,
-      }),
+      headers: await this.buildAuthHeaders(body),
+      body,
     });
 
     return response as ModalDocumentResponse;
@@ -157,14 +211,15 @@ export class ModalOCRAdapter {
    */
   async processDocumentFromBase64(imageBase64: string, pipeline: string): Promise<ModalDocumentResponse> {
     const endpoint = `${this.config.baseUrl}-process-document.modal.run`;
+    const body = JSON.stringify({
+      image_base64: imageBase64,
+      pipeline,
+    });
 
     const response = await this.fetchWithRetry(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_base64: imageBase64,
-        pipeline,
-      }),
+      headers: await this.buildAuthHeaders(body),
+      body,
     });
 
     return response as ModalDocumentResponse;

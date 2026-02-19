@@ -65,9 +65,54 @@ export function validateNumericRange(
 }
 
 /**
- * Validate file upload
+ * Magic bytes signatures for file type validation
+ * This prevents malicious files from being uploaded with spoofed MIME types
  */
-export function validateFileUpload(file: unknown): asserts file is Blob {
+const FILE_SIGNATURES: Record<string, { bytes: number[]; offset?: number; mime: string }[]> = {
+  jpeg: [
+    { bytes: [0xFF, 0xD8, 0xFF], mime: 'image/jpeg' },
+  ],
+  png: [
+    { bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], mime: 'image/png' },
+  ],
+  webp: [
+    { bytes: [0x52, 0x49, 0x46, 0x46], mime: 'image/webp' }, // RIFF header
+  ],
+  pdf: [
+    { bytes: [0x25, 0x50, 0x44, 0x46], mime: 'application/pdf' }, // %PDF
+  ],
+};
+
+/**
+ * Check if file bytes match a known signature
+ */
+function matchesSignature(bytes: Uint8Array, signature: { bytes: number[]; offset?: number }): boolean {
+  const offset = signature.offset ?? 0;
+  if (bytes.length < offset + signature.bytes.length) {
+    return false;
+  }
+  return signature.bytes.every((byte, i) => bytes[offset + i] === byte);
+}
+
+/**
+ * Detect file type from magic bytes
+ */
+function detectFileType(bytes: Uint8Array): string | null {
+  for (const [type, signatures] of Object.entries(FILE_SIGNATURES)) {
+    for (const sig of signatures) {
+      if (matchesSignature(bytes, sig)) {
+        return sig.mime;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate file upload with magic bytes verification
+ * SEC-02: Validates file signature to prevent malicious file uploads
+ */
+export async function validateFileUpload(file: unknown): Promise<void> {
   if (!file || typeof file === 'string') {
     throw new ValidationError('Fichier requis');
   }
@@ -81,7 +126,62 @@ export function validateFileUpload(file: unknown): asserts file is Blob {
     );
   }
 
-  // Check type (basic validation)
+  // Minimum file size check (prevent empty files)
+  if (blob.size < 100) {
+    throw new ValidationError('Fichier trop petit ou vide');
+  }
+
+  // Read first 16 bytes for magic bytes validation
+  const headerBuffer = await blob.slice(0, 16).arrayBuffer();
+  const headerBytes = new Uint8Array(headerBuffer);
+
+  // Detect actual file type from magic bytes
+  const detectedType = detectFileType(headerBytes);
+
+  if (!detectedType) {
+    throw new ValidationError('Type de fichier non reconnu. Formats supportés: JPEG, PNG, WebP, PDF');
+  }
+
+  // Verify MIME type matches detected type (if provided)
+  const declaredType = (blob as { type?: string }).type ?? '';
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+  if (!allowedTypes.includes(detectedType)) {
+    throw new ValidationError(`Type de fichier non supporté: ${detectedType}`);
+  }
+
+  // Warn if declared type doesn't match detected type (potential spoofing attempt)
+  if (declaredType && declaredType !== detectedType) {
+    // Log potential spoofing but allow if detected type is valid
+    console.log(JSON.stringify({
+      type: 'security_warning',
+      message: 'MIME type mismatch detected',
+      declared: declaredType,
+      detected: detectedType,
+      timestamp: new Date().toISOString(),
+    }));
+  }
+}
+
+/**
+ * Sync version for backward compatibility (basic validation only)
+ * @deprecated Use async validateFileUpload instead
+ */
+export function validateFileUploadSync(file: unknown): asserts file is Blob {
+  if (!file || typeof file === 'string') {
+    throw new ValidationError('Fichier requis');
+  }
+
+  const blob = file as Blob;
+
+  // Check size
+  if (blob.size > LIMITS.UPLOAD_SIZE_MAX) {
+    throw new ValidationError(
+      `Fichier trop volumineux. Maximum: ${LIMITS.UPLOAD_SIZE_MAX / 1024 / 1024}MB`
+    );
+  }
+
+  // Check type (basic validation - use async version for magic bytes)
   const type = (blob as { type?: string }).type ?? '';
   const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
   if (type && !allowedTypes.includes(type)) {

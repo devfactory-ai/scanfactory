@@ -7,10 +7,17 @@ export interface JWTPayload {
   role: 'admin' | 'operator' | 'consultant';
   iat: number;
   exp: number;
+  type?: 'access' | 'refresh'; // Token type for refresh token flow
 }
 
 const ALGORITHM = 'HS256';
-const TOKEN_EXPIRY = 24 * 60 * 60; // 24 hours in seconds
+
+// SEC-03: Short-lived access tokens + long-lived refresh tokens
+const ACCESS_TOKEN_EXPIRY = 15 * 60; // 15 minutes
+const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60; // 7 days
+
+// Legacy expiry for backward compatibility
+const TOKEN_EXPIRY = 24 * 60 * 60; // 24 hours (deprecated, use ACCESS_TOKEN_EXPIRY)
 
 function base64UrlEncode(data: Uint8Array): string {
   const base64 = btoa(String.fromCharCode(...data));
@@ -137,4 +144,139 @@ export async function getSession(
   userId: string
 ): Promise<string | null> {
   return cache.get(`session:${userId}`);
+}
+
+// =============================================================================
+// SEC-03: Refresh Token Functions
+// =============================================================================
+
+/**
+ * Create an access token (short-lived, 15 minutes)
+ */
+export async function createAccessToken(
+  payload: Omit<JWTPayload, 'iat' | 'exp' | 'type'>,
+  secret: string
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const fullPayload: JWTPayload = {
+    ...payload,
+    type: 'access',
+    iat: now,
+    exp: now + ACCESS_TOKEN_EXPIRY,
+  };
+
+  const header = { alg: ALGORITHM, typ: 'JWT' };
+  const headerEncoded = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(header))
+  );
+  const payloadEncoded = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(fullPayload))
+  );
+  const dataToSign = `${headerEncoded}.${payloadEncoded}`;
+  const signature = await createSignature(dataToSign, secret);
+  const signatureEncoded = base64UrlEncode(signature);
+
+  return `${dataToSign}.${signatureEncoded}`;
+}
+
+/**
+ * Create a refresh token (long-lived, 7 days)
+ */
+export async function createRefreshToken(
+  payload: Omit<JWTPayload, 'iat' | 'exp' | 'type'>,
+  secret: string
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const fullPayload: JWTPayload = {
+    ...payload,
+    type: 'refresh',
+    iat: now,
+    exp: now + REFRESH_TOKEN_EXPIRY,
+  };
+
+  const header = { alg: ALGORITHM, typ: 'JWT' };
+  const headerEncoded = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(header))
+  );
+  const payloadEncoded = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(fullPayload))
+  );
+  const dataToSign = `${headerEncoded}.${payloadEncoded}`;
+  const signature = await createSignature(dataToSign, secret);
+  const signatureEncoded = base64UrlEncode(signature);
+
+  return `${dataToSign}.${signatureEncoded}`;
+}
+
+/**
+ * Create both access and refresh tokens
+ */
+export async function createTokenPair(
+  payload: Omit<JWTPayload, 'iat' | 'exp' | 'type'>,
+  secret: string
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const [accessToken, refreshToken] = await Promise.all([
+    createAccessToken(payload, secret),
+    createRefreshToken(payload, secret),
+  ]);
+  return { accessToken, refreshToken };
+}
+
+/**
+ * Verify a refresh token and check it's not blacklisted
+ */
+export async function verifyRefreshToken(
+  token: string,
+  secret: string,
+  cache: KVNamespace
+): Promise<JWTPayload | null> {
+  const payload = await verifyToken(token, secret);
+
+  if (!payload) return null;
+
+  // Must be a refresh token
+  if (payload.type !== 'refresh') return null;
+
+  // Check if token is blacklisted (revoked)
+  const isBlacklisted = await cache.get(`blacklist:${token.slice(-32)}`);
+  if (isBlacklisted) return null;
+
+  return payload;
+}
+
+/**
+ * Blacklist a refresh token (for logout or rotation)
+ */
+export async function blacklistRefreshToken(
+  cache: KVNamespace,
+  token: string,
+  expiresInSec: number = REFRESH_TOKEN_EXPIRY
+): Promise<void> {
+  // Use last 32 chars of token as key to save space
+  await cache.put(`blacklist:${token.slice(-32)}`, '1', {
+    expirationTtl: expiresInSec,
+  });
+}
+
+/**
+ * Store refresh token session
+ */
+export async function storeRefreshSession(
+  cache: KVNamespace,
+  userId: string,
+  refreshToken: string
+): Promise<void> {
+  await cache.put(`refresh:${userId}`, refreshToken, {
+    expirationTtl: REFRESH_TOKEN_EXPIRY,
+  });
+}
+
+/**
+ * Get token expiry times for client
+ */
+export function getTokenExpiry() {
+  return {
+    accessTokenExpiry: ACCESS_TOKEN_EXPIRY,
+    refreshTokenExpiry: REFRESH_TOKEN_EXPIRY,
+  };
 }

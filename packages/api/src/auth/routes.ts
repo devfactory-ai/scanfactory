@@ -1,6 +1,17 @@
 import { Hono } from 'hono';
 import type { Env } from '../index';
-import { createToken, storeSession, invalidateSession, verifyToken } from './jwt';
+import {
+  createToken,
+  createTokenPair,
+  createAccessToken,
+  storeSession,
+  storeRefreshSession,
+  invalidateSession,
+  verifyToken,
+  verifyRefreshToken,
+  blacklistRefreshToken,
+  getTokenExpiry,
+} from './jwt';
 import { requestOTP, verifyOTP } from './otp';
 import { ValidationError, UnauthorizedError } from '../lib/errors';
 import { hashPassword, verifyPassword, needsMigration } from './password';
@@ -9,10 +20,12 @@ import { logAudit } from '../lib/audit';
 
 // Cookie configuration
 const AUTH_COOKIE_NAME = 'auth_token';
-const AUTH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
+const REFRESH_COOKIE_NAME = 'refresh_token';
+const AUTH_COOKIE_MAX_AGE = 15 * 60; // 15 minutes (access token)
+const REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60; // 7 days (refresh token)
 
 /**
- * Set authentication cookie with secure flags
+ * Set authentication cookie with secure flags (access token)
  */
 function setAuthCookie(
   c: { header: (name: string, value: string) => void; env: Env },
@@ -27,9 +40,26 @@ function setAuthCookie(
 }
 
 /**
- * Clear authentication cookie
+ * Set refresh token cookie (long-lived, separate from access token)
  */
-function clearAuthCookie(
+function setRefreshCookie(
+  c: { header: (name: string, value: string) => void; env: Env },
+  token: string
+): void {
+  const isProduction = c.env.ENVIRONMENT === 'production';
+
+  // Refresh token cookie - HttpOnly, Secure, SameSite=Strict
+  // Path=/api/auth to limit exposure (only auth endpoints can read it)
+  c.header(
+    'Set-Cookie',
+    `${REFRESH_COOKIE_NAME}=${token}; Path=/api/auth; HttpOnly; SameSite=Strict; Max-Age=${REFRESH_COOKIE_MAX_AGE}${isProduction ? '; Secure' : ''}`
+  );
+}
+
+/**
+ * Clear authentication cookies (both access and refresh)
+ */
+function clearAuthCookies(
   c: { header: (name: string, value: string) => void; env: Env }
 ): void {
   const isProduction = c.env.ENVIRONMENT === 'production';
@@ -41,21 +71,49 @@ function clearAuthCookie(
 }
 
 /**
+ * Clear refresh cookie
+ */
+function clearRefreshCookie(
+  c: { header: (name: string, value: string) => void; env: Env }
+): void {
+  const isProduction = c.env.ENVIRONMENT === 'production';
+
+  c.header(
+    'Set-Cookie',
+    `${REFRESH_COOKIE_NAME}=; Path=/api/auth; HttpOnly; SameSite=Strict; Max-Age=0${isProduction ? '; Secure' : ''}`
+  );
+}
+
+// Legacy function for backward compatibility
+function clearAuthCookie(
+  c: { header: (name: string, value: string) => void; env: Env }
+): void {
+  clearAuthCookies(c);
+  clearRefreshCookie(c);
+}
+
+/**
+ * Parse cookies from request
+ */
+function parseCookies(request: Request): Record<string, string> {
+  const cookieHeader = request.headers.get('Cookie');
+  if (!cookieHeader) return {};
+
+  return cookieHeader.split(';').reduce((acc, cookie) => {
+    const [name, ...rest] = cookie.trim().split('=');
+    acc[name] = rest.join('='); // Handle values with = in them
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+/**
  * Extract auth token from cookie or Authorization header (for backward compatibility)
  */
 function getAuthToken(request: Request): string | null {
   // First try cookie
-  const cookieHeader = request.headers.get('Cookie');
-  if (cookieHeader) {
-    const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
-      const [name, value] = cookie.trim().split('=');
-      acc[name] = value;
-      return acc;
-    }, {} as Record<string, string>);
-
-    if (cookies[AUTH_COOKIE_NAME]) {
-      return cookies[AUTH_COOKIE_NAME];
-    }
+  const cookies = parseCookies(request);
+  if (cookies[AUTH_COOKIE_NAME]) {
+    return cookies[AUTH_COOKIE_NAME];
   }
 
   // Fall back to Authorization header (backward compatibility for mobile app)
@@ -65,6 +123,14 @@ function getAuthToken(request: Request): string | null {
   }
 
   return null;
+}
+
+/**
+ * Extract refresh token from cookie
+ */
+function getRefreshToken(request: Request): string | null {
+  const cookies = parseCookies(request);
+  return cookies[REFRESH_COOKIE_NAME] || null;
 }
 
 /**
@@ -142,8 +208,8 @@ authRoutes.post('/login', async (c) => {
       .run();
   }
 
-  // Create JWT
-  const token = await createToken(
+  // Create token pair (access + refresh)
+  const { accessToken, refreshToken } = await createTokenPair(
     {
       sub: user.id,
       email: user.email,
@@ -153,11 +219,15 @@ authRoutes.post('/login', async (c) => {
     c.env.JWT_SECRET
   );
 
-  // Store session in KV
-  await storeSession(c.env.CACHE, user.id, token);
+  // Store sessions in KV
+  await Promise.all([
+    storeSession(c.env.CACHE, user.id, accessToken),
+    storeRefreshSession(c.env.CACHE, user.id, refreshToken),
+  ]);
 
-  // Set httpOnly cookie
-  setAuthCookie(c, token);
+  // Set httpOnly cookies
+  setAuthCookie(c, accessToken);
+  setRefreshCookie(c, refreshToken);
 
   // Audit log: successful login
   await logAudit(c.env.DB, {
@@ -168,10 +238,14 @@ authRoutes.post('/login', async (c) => {
     newValue: { method: 'password', email: user.email },
   });
 
-  // Include token in response for mobile clients (cookies don't work well with RN)
+  // Include tokens in response for mobile clients (cookies don't work well with RN)
+  const { accessTokenExpiry, refreshTokenExpiry } = getTokenExpiry();
   const responseData: {
     user: { id: string; email: string; name: string; role: string };
-    token?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    expiresIn?: number;
+    token?: string; // Legacy field for backward compatibility
   } = {
     user: {
       id: user.id,
@@ -182,24 +256,45 @@ authRoutes.post('/login', async (c) => {
   };
 
   if (isMobileClient(c.req.raw)) {
-    responseData.token = token;
+    responseData.accessToken = accessToken;
+    responseData.refreshToken = refreshToken;
+    responseData.expiresIn = accessTokenExpiry;
+    responseData.token = accessToken; // Legacy compatibility
   }
 
   return c.json(responseData);
 });
 
-// POST /api/auth/refresh
+// POST /api/auth/refresh - Refresh access token using refresh token
 authRoutes.post('/refresh', async (c) => {
-  const oldToken = getAuthToken(c.req.raw);
+  // Try to get refresh token from cookie first, then from body (mobile)
+  let refreshTokenValue = getRefreshToken(c.req.raw);
 
-  if (!oldToken) {
-    throw new UnauthorizedError('Token manquant');
+  if (!refreshTokenValue) {
+    // Try to get from request body (for mobile clients)
+    try {
+      const body = await c.req.json<{ refreshToken?: string }>();
+      refreshTokenValue = body.refreshToken ?? null;
+    } catch {
+      // No body or invalid JSON
+    }
   }
 
-  const payload = await verifyToken(oldToken, c.env.JWT_SECRET);
+  if (!refreshTokenValue) {
+    throw new UnauthorizedError('Refresh token manquant');
+  }
+
+  // Verify refresh token (checks signature, expiry, and blacklist)
+  const payload = await verifyRefreshToken(
+    refreshTokenValue,
+    c.env.JWT_SECRET,
+    c.env.CACHE
+  );
 
   if (!payload) {
-    throw new UnauthorizedError('Token invalide ou expiré');
+    // Clear cookies if refresh token is invalid
+    clearAuthCookie(c);
+    throw new UnauthorizedError('Refresh token invalide ou expiré');
   }
 
   // Check if user is still active
@@ -213,8 +308,11 @@ authRoutes.post('/refresh', async (c) => {
     throw new UnauthorizedError('Utilisateur non trouvé ou désactivé');
   }
 
-  // Create new token
-  const newToken = await createToken(
+  // Rotate refresh token (blacklist old one, create new pair)
+  await blacklistRefreshToken(c.env.CACHE, refreshTokenValue);
+
+  // Create new token pair
+  const { accessToken, refreshToken: newRefreshToken } = await createTokenPair(
     {
       sub: user.id,
       email: user.email,
@@ -224,16 +322,24 @@ authRoutes.post('/refresh', async (c) => {
     c.env.JWT_SECRET
   );
 
-  // Update session in KV
-  await storeSession(c.env.CACHE, user.id, newToken);
+  // Update sessions in KV
+  await Promise.all([
+    storeSession(c.env.CACHE, user.id, accessToken),
+    storeRefreshSession(c.env.CACHE, user.id, newRefreshToken),
+  ]);
 
-  // Set httpOnly cookie with new token
-  setAuthCookie(c, newToken);
+  // Set httpOnly cookies with new tokens
+  setAuthCookie(c, accessToken);
+  setRefreshCookie(c, newRefreshToken);
 
-  // Include token in response for mobile clients
+  // Include tokens in response for mobile clients
+  const { accessTokenExpiry } = getTokenExpiry();
   const responseData: {
     user: { id: string; email: string; name: string; role: string };
-    token?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    expiresIn?: number;
+    token?: string; // Legacy
   } = {
     user: {
       id: user.id,
@@ -244,7 +350,10 @@ authRoutes.post('/refresh', async (c) => {
   };
 
   if (isMobileClient(c.req.raw)) {
-    responseData.token = newToken;
+    responseData.accessToken = accessToken;
+    responseData.refreshToken = newRefreshToken;
+    responseData.expiresIn = accessTokenExpiry;
+    responseData.token = accessToken; // Legacy
   }
 
   return c.json(responseData);
@@ -253,6 +362,7 @@ authRoutes.post('/refresh', async (c) => {
 // POST /api/auth/logout
 authRoutes.post('/logout', async (c) => {
   const token = getAuthToken(c.req.raw);
+  const refreshTokenValue = getRefreshToken(c.req.raw);
   let userId: string | null = null;
 
   if (token) {
@@ -264,7 +374,12 @@ authRoutes.post('/logout', async (c) => {
     }
   }
 
-  // Clear httpOnly cookie
+  // Blacklist refresh token if present
+  if (refreshTokenValue) {
+    await blacklistRefreshToken(c.env.CACHE, refreshTokenValue);
+  }
+
+  // Clear httpOnly cookies (both access and refresh)
   clearAuthCookie(c);
 
   // Audit log: logout (only if user was authenticated)
@@ -311,10 +426,25 @@ authRoutes.post('/otp/verify', async (c) => {
     throw new UnauthorizedError(result.message);
   }
 
-  // Store session and set cookie
-  if (result.token && result.user) {
-    await storeSession(c.env.CACHE, result.user.id, result.token);
-    setAuthCookie(c, result.token);
+  // Create token pair and store session
+  if (result.user) {
+    const { accessToken, refreshToken } = await createTokenPair(
+      {
+        sub: result.user.id,
+        email: result.user.email || '',
+        name: result.user.name,
+        role: result.user.role as 'admin' | 'operator' | 'consultant',
+      },
+      c.env.JWT_SECRET
+    );
+
+    await Promise.all([
+      storeSession(c.env.CACHE, result.user.id, accessToken),
+      storeRefreshSession(c.env.CACHE, result.user.id, refreshToken),
+    ]);
+
+    setAuthCookie(c, accessToken);
+    setRefreshCookie(c, refreshToken);
 
     // Audit log: successful OTP login
     await logAudit(c.env.DB, {
@@ -324,21 +454,30 @@ authRoutes.post('/otp/verify', async (c) => {
       entityId: result.user.id,
       newValue: { method: 'otp', phone: result.user.phone },
     });
+
+    // Include tokens in response for mobile clients
+    const { accessTokenExpiry } = getTokenExpiry();
+    const responseData: {
+      user: typeof result.user;
+      accessToken?: string;
+      refreshToken?: string;
+      expiresIn?: number;
+      token?: string; // Legacy
+    } = {
+      user: result.user,
+    };
+
+    if (isMobileClient(c.req.raw)) {
+      responseData.accessToken = accessToken;
+      responseData.refreshToken = refreshToken;
+      responseData.expiresIn = accessTokenExpiry;
+      responseData.token = accessToken; // Legacy
+    }
+
+    return c.json(responseData);
   }
 
-  // Include token in response for mobile clients
-  const responseData: {
-    user: typeof result.user;
-    token?: string;
-  } = {
-    user: result.user,
-  };
-
-  if (isMobileClient(c.req.raw) && result.token) {
-    responseData.token = result.token;
-  }
-
-  return c.json(responseData);
+  return c.json({ user: result.user });
 });
 
 // GET /api/auth/me - Get current user info

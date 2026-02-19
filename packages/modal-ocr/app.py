@@ -273,6 +273,33 @@ class EasyOCRService:
 # Web Endpoints
 # =============================================================================
 
+# OCR-01: Use cached service instances instead of creating new ones
+# These are module-level singletons that persist across requests
+_paddle_service = None
+_surya_service = None
+_easyocr_service = None
+
+def get_paddle_service():
+    global _paddle_service
+    if _paddle_service is None:
+        _paddle_service = PaddleOCRService()
+    return _paddle_service
+
+def get_surya_service():
+    global _surya_service
+    if _surya_service is None:
+        _surya_service = SuryaOCRService()
+    return _surya_service
+
+def get_easyocr_service():
+    global _easyocr_service
+    if _easyocr_service is None:
+        _easyocr_service = EasyOCRService()
+    return _easyocr_service
+
+# Default engine for fallback
+DEFAULT_ENGINE = "paddleocr"
+
 @app.function(image=paddleocr_image, volumes={"/root/.paddleocr": model_cache}, cpu=2, memory=4096)
 @modal.web_endpoint(method="POST", docs=True)
 async def process_ocr(request: dict) -> dict:
@@ -293,32 +320,59 @@ async def process_ocr(request: dict) -> dict:
 
     # Get image bytes
     if "image_url" in request:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(request["image_url"])
-            response.raise_for_status()
-            image_bytes = response.content
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(request["image_url"])
+                response.raise_for_status()
+                image_bytes = response.content
+        except Exception as e:
+            return {"error": f"Failed to fetch image: {str(e)}", "success": False}
     elif "image_base64" in request:
-        image_bytes = base64.b64decode(request["image_base64"])
+        try:
+            image_bytes = base64.b64decode(request["image_base64"])
+        except Exception as e:
+            return {"error": f"Invalid base64: {str(e)}", "success": False}
     else:
         return {"error": "image_url or image_base64 required", "success": False}
 
-    # Select engine
-    engine = request.get("engine", "paddleocr")
+    # Select engine with fallback
+    engine = request.get("engine", DEFAULT_ENGINE)
     with_layout = request.get("with_layout", True)
 
-    if engine == "paddleocr":
-        service = PaddleOCRService()
-        result = service.process.remote(image_bytes, with_layout)
-    elif engine == "surya":
-        service = SuryaOCRService()
-        result = service.process.remote(image_bytes)
-    elif engine == "easyocr":
-        service = EasyOCRService()
-        result = service.process.remote(image_bytes)
-    else:
-        return {"error": f"Unknown engine: {engine}", "success": False}
+    # OCR-02: Fallback to default engine if unknown engine specified
+    valid_engines = ["paddleocr", "surya", "easyocr"]
+    if engine not in valid_engines:
+        print(f"Unknown engine '{engine}', falling back to {DEFAULT_ENGINE}")
+        engine = DEFAULT_ENGINE
 
-    return {"success": True, **result}
+    try:
+        if engine == "paddleocr":
+            service = get_paddle_service()
+            result = service.process.remote(image_bytes, with_layout)
+        elif engine == "surya":
+            service = get_surya_service()
+            result = service.process.remote(image_bytes)
+        elif engine == "easyocr":
+            service = get_easyocr_service()
+            result = service.process.remote(image_bytes)
+        else:
+            # This shouldn't happen due to fallback above, but just in case
+            service = get_paddle_service()
+            result = service.process.remote(image_bytes, with_layout)
+
+        return {"success": True, **result}
+
+    except Exception as e:
+        # OCR-02: If primary engine fails, try fallback
+        if engine != DEFAULT_ENGINE:
+            print(f"Engine {engine} failed, falling back to {DEFAULT_ENGINE}: {str(e)}")
+            try:
+                service = get_paddle_service()
+                result = service.process.remote(image_bytes, with_layout)
+                return {"success": True, "fallback_used": True, "original_engine": engine, **result}
+            except Exception as fallback_error:
+                return {"error": f"All engines failed. Primary: {str(e)}, Fallback: {str(fallback_error)}", "success": False}
+        return {"error": str(e), "success": False}
 
 
 @app.function()
