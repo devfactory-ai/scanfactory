@@ -5,9 +5,10 @@ import type { ReactNode } from 'react';
 interface ProtectedRouteProps {
   children: ReactNode;
   allowedRoles?: Array<'admin' | 'operator' | 'consultant'>;
+  requiredRole?: 'admin' | 'operator' | 'consultant';
 }
 
-export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, allowedRoles, requiredRole }: ProtectedRouteProps) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const location = useLocation();
 
@@ -23,7 +24,10 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (allowedRoles && user && !allowedRoles.includes(user.role)) {
+  // Combine allowedRoles and requiredRole
+  const effectiveAllowedRoles = requiredRole ? [requiredRole] : allowedRoles;
+
+  if (effectiveAllowedRoles && user && !effectiveAllowedRoles.includes(user.role)) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">

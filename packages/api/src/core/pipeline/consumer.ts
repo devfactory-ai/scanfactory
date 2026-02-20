@@ -5,6 +5,7 @@ import type { DocumentData } from './types';
 // Import rules to register them
 import './rules';
 import '../../pipelines/bulletin_soin/rules';
+import '../../pipelines/facture/rules';
 
 interface QueueMessage {
   type: 'process_document';

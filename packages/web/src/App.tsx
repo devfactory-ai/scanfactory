@@ -13,6 +13,7 @@ const Scan = lazy(() => import('./pages/Scan').then(m => ({ default: m.Scan })))
 const ValidationQueue = lazy(() => import('./pages/ValidationQueue').then(m => ({ default: m.ValidationQueue })));
 const ValidationDetail = lazy(() => import('./pages/ValidationDetail').then(m => ({ default: m.ValidationDetail })));
 const ValidationBatch = lazy(() => import('./pages/ValidationBatch').then(m => ({ default: m.ValidationBatch })));
+const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,6 +35,13 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Admin pages lazy loaded
+const AdminPipelines = lazy(() => import('./pages/admin/Pipelines'));
+const AdminLookupTables = lazy(() => import('./pages/admin/LookupTables'));
+const AdminBulletinSoin = lazy(() => import('./pages/admin/BulletinSoin'));
+const AdminUsers = lazy(() => import('./pages/admin/Users'));
+const AdminAuditLog = lazy(() => import('./pages/admin/AuditLog'));
 
 // Placeholder page
 function BatchesPage() {
@@ -120,6 +128,92 @@ function App() {
                       <Layout>
                         <ErrorBoundary>
                           <BatchesPage />
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/dashboard"
+                  element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <Dashboard />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+
+                {/* Admin routes */}
+                <Route
+                  path="/admin/pipelines"
+                  element={
+                    <ProtectedRoute requiredRole="admin">
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <AdminPipelines />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/lookup-tables"
+                  element={
+                    <ProtectedRoute requiredRole="admin">
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <AdminLookupTables />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/bulletin-soin"
+                  element={
+                    <ProtectedRoute requiredRole="admin">
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <AdminBulletinSoin />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/users"
+                  element={
+                    <ProtectedRoute requiredRole="admin">
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <AdminUsers />
+                          </Suspense>
+                        </ErrorBoundary>
+                      </Layout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/audit-log"
+                  element={
+                    <ProtectedRoute requiredRole="admin">
+                      <Layout>
+                        <ErrorBoundary>
+                          <Suspense fallback={<LoadingSpinner />}>
+                            <AdminAuditLog />
+                          </Suspense>
                         </ErrorBoundary>
                       </Layout>
                     </ProtectedRoute>

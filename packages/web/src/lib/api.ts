@@ -83,6 +83,29 @@ class ApiClient {
     return response.json() as Promise<T>;
   }
 
+  // Generic HTTP methods for admin pages
+  async get<T>(endpoint: string): Promise<T> {
+    return this.request<T>(endpoint);
+  }
+
+  async post<T>(endpoint: string, data?: unknown): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'POST',
+      body: data ? JSON.stringify(data) : undefined,
+    });
+  }
+
+  async put<T>(endpoint: string, data?: unknown): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'PUT',
+      body: data ? JSON.stringify(data) : undefined,
+    });
+  }
+
+  async delete<T>(endpoint: string): Promise<T> {
+    return this.request<T>(endpoint, { method: 'DELETE' });
+  }
+
   // Auth endpoints
   async login(email: string, password: string) {
     const result = await this.request<{

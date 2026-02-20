@@ -9,6 +9,7 @@ import { extractionRoutes } from './core/extraction/routes';
 import { validationRoutes } from './core/validation/routes';
 import { batchRoutes } from './core/batches/routes';
 import { adminRoutes } from './admin/routes';
+import { dashboardRoutes } from './dashboard/routes';
 import { errorHandler } from './lib/errors';
 import { handleQueueMessage, type MessageBatch } from './core/pipeline/consumer';
 import { handleScheduledBatchClosure } from './core/batches/cron';
@@ -202,6 +203,10 @@ app.route('/api/batches', batchRoutes); // Backward compatibility
 // Admin routes (protected, admin only)
 app.route('/api/v1/admin', adminRoutes);
 app.route('/api/admin', adminRoutes); // Backward compatibility
+
+// Dashboard routes (protected)
+app.route('/api/v1/dashboard', dashboardRoutes);
+app.route('/api/dashboard', dashboardRoutes); // Backward compatibility
 
 // API version info endpoint
 app.get('/api/version', (c) => {
