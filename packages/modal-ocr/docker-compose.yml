@@ -190,6 +190,85 @@ services:
     profiles:
       - gateway
 
+  # Unified REST API Service (recommended for external consumption)
+  scanfactory-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      args:
+        INSTALL_GUTENOCR: "false"
+        INSTALL_MISTRAL: "true"
+        INSTALL_PADDLEOCR: "false"
+        INSTALL_SURYA: "false"
+
+    image: scanfactory-ocr-api:latest
+    container_name: scanfactory-api
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - api-models:/app/models
+
+    environment:
+      - OCR_DEFAULT_ENGINE=auto
+      - OCR_API_KEY=${OCR_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - LOG_LEVEL=INFO
+
+    ports:
+      - "8080:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    profiles:
+      - api
+
+  # Full API with all engines (GPU required)
+  scanfactory-api-full:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      args:
+        INSTALL_GUTENOCR: "true"
+        INSTALL_MISTRAL: "true"
+        INSTALL_PADDLEOCR: "true"
+        INSTALL_SURYA: "true"
+
+    image: scanfactory-ocr-api:full
+    container_name: scanfactory-api-full
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - api-models:/app/models
+
+    environment:
+      - OCR_DEFAULT_ENGINE=auto
+      - OCR_API_KEY=${OCR_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - LOG_LEVEL=INFO
+
+    ports:
+      - "8080:8000"
+
+    profiles:
+      - api-full
+
 volumes:
   gutenocr-models:
     name: scanfactory-gutenocr-models
+  api-models:
+    name: scanfactory-api-models

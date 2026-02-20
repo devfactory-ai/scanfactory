@@ -2,20 +2,21 @@
 ScanFactory Modal Multi-OCR Service
 
 Service de traitement OCR multi-moteurs pour documents médicaux.
-Supporte: PaddleOCR, SuryaOCR, HunyuanOCR, Tesseract, EasyOCR
+Supporte: GutenOCR, Mistral OCR, PaddleOCR, SuryaOCR, EasyOCR, Tesseract
 
 Architecture:
   Image → Modal (OCR Engine) → Cloudflare Workers AI (Extraction) → Données
 """
 
 import modal
+import os
 
 # Configuration de l'application Modal
 app = modal.App("scanfactory-ocr")
 
 # Image Docker de base avec dépendances communes
 base_image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.debian_slim(python_version="3.11")
     .apt_install(
         "libgl1-mesa-glx",
         "libglib2.0-0",
@@ -55,6 +56,30 @@ surya_image = base_image.pip_install(
 easyocr_image = base_image.pip_install(
     "torch>=2.2.0",
     "easyocr>=1.7.0",
+)
+
+# Image GutenOCR (VLM based on Qwen2.5-VL)
+gutenocr_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install(
+        "libgl1-mesa-glx",
+        "libglib2.0-0",
+        "git",
+    )
+    .pip_install(
+        "torch>=2.2.0",
+        "transformers>=4.37.0",
+        "accelerate>=0.26.0",
+        "qwen-vl-utils>=0.0.8",
+        "Pillow>=10.1.0",
+        "numpy>=1.24.3",
+        "pydantic>=2.5.2",
+    )
+)
+
+# Image Mistral OCR (API-based)
+mistral_image = base_image.pip_install(
+    "mistralai>=1.0.0",
 )
 
 # Volume pour le cache des modèles
@@ -270,6 +295,209 @@ class EasyOCRService:
 
 
 # =============================================================================
+# GutenOCR Service (VLM-based)
+# =============================================================================
+
+@app.cls(
+    image=gutenocr_image,
+    volumes={"/root/.cache": model_cache},
+    cpu=4,
+    memory=16384,
+    gpu="T4",
+    timeout=600,
+    container_idle_timeout=120,
+)
+class GutenOCRService:
+    """Service OCR avec GutenOCR (VLM basé sur Qwen2.5-VL)."""
+
+    def __init__(self):
+        self.processor = None
+        self.model = None
+        self.model_size = os.getenv("GUTENOCR_MODEL_SIZE", "3b")
+
+    @modal.enter()
+    def setup(self):
+        import torch
+        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+
+        model_name = f"rootsautomation/GutenOCR-{self.model_size.upper()}"
+        print(f"Loading GutenOCR model: {model_name}")
+
+        self.processor = AutoProcessor.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+        )
+
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        print(f"✅ GutenOCR {self.model_size.upper()} initialized")
+
+    @modal.method()
+    def process(self, image_bytes: bytes, output_format: str = "TEXT") -> dict:
+        import io
+        import torch
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_bytes))
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        # Build prompt based on format
+        prompts = {
+            "TEXT": "Extract all text from this image.",
+            "LINES": "Extract text from this image line by line.",
+            "WORDS": "Extract all words from this image with their positions.",
+            "LATEX": "Extract mathematical expressions in LaTeX format.",
+        }
+        prompt = prompts.get(output_format.upper(), prompts["TEXT"])
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+
+        text_prompt = self.processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+        )
+
+        inputs = self.processor(
+            text=[text_prompt],
+            images=[image],
+            padding=True,
+            return_tensors="pt",
+        )
+
+        inputs = {k: v.cuda() if hasattr(v, 'cuda') else v for k, v in inputs.items()}
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=4096,
+                do_sample=False,
+            )
+
+        generated_ids = output_ids[:, inputs["input_ids"].shape[1]:]
+        text = self.processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+        )[0]
+
+        return {
+            "text": text,
+            "blocks": [],
+            "confidence": 0.90,
+            "engine": f"gutenocr-{self.model_size}",
+            "layout": {"width": image.width, "height": image.height},
+        }
+
+
+# =============================================================================
+# Mistral OCR Service (API-based)
+# =============================================================================
+
+@app.cls(
+    image=mistral_image,
+    secrets=[modal.Secret.from_name("mistral-api-key", required=False)],
+    cpu=1,
+    memory=512,
+    timeout=120,
+    container_idle_timeout=60,
+)
+class MistralOCRService:
+    """Service OCR avec Mistral AI API."""
+
+    def __init__(self):
+        self.client = None
+
+    @modal.enter()
+    def setup(self):
+        from mistralai import Mistral
+
+        api_key = os.getenv("MISTRAL_API_KEY")
+        if api_key:
+            self.client = Mistral(api_key=api_key)
+            print("✅ Mistral OCR initialized")
+        else:
+            print("⚠️ MISTRAL_API_KEY not set, Mistral OCR unavailable")
+
+    @modal.method()
+    def process(self, image_bytes: bytes, extract_tables: bool = True) -> dict:
+        import base64
+        import io
+        from PIL import Image
+
+        if not self.client:
+            return {
+                "text": "",
+                "blocks": [],
+                "confidence": 0.0,
+                "engine": "mistral_ocr",
+                "error": "Mistral API key not configured",
+            }
+
+        # Get image dimensions
+        image = Image.open(io.BytesIO(image_bytes))
+
+        # Convert to base64
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = "image/png"
+
+        # Determine mime type
+        if image_bytes[:2] == b'\xff\xd8':
+            mime_type = "image/jpeg"
+        elif image_bytes[:4] == b'%PDF':
+            mime_type = "application/pdf"
+
+        # Call Mistral OCR API
+        try:
+            response = self.client.ocr.process(
+                model="mistral-ocr-2512",
+                document={
+                    "type": "image_url",
+                    "image_url": f"data:{mime_type};base64,{image_base64}",
+                },
+            )
+
+            # Extract text from response
+            text_parts = []
+            blocks = []
+
+            if hasattr(response, 'pages'):
+                for page in response.pages:
+                    if hasattr(page, 'markdown'):
+                        text_parts.append(page.markdown)
+
+            text = "\n".join(text_parts) if text_parts else str(response)
+
+            return {
+                "text": text,
+                "blocks": blocks,
+                "confidence": 0.95,
+                "engine": "mistral_ocr",
+                "layout": {"width": image.width, "height": image.height},
+            }
+
+        except Exception as e:
+            return {
+                "text": "",
+                "blocks": [],
+                "confidence": 0.0,
+                "engine": "mistral_ocr",
+                "error": str(e),
+            }
+
+
+# =============================================================================
 # Web Endpoints
 # =============================================================================
 
@@ -278,6 +506,8 @@ class EasyOCRService:
 _paddle_service = None
 _surya_service = None
 _easyocr_service = None
+_gutenocr_service = None
+_mistral_service = None
 
 def get_paddle_service():
     global _paddle_service
@@ -297,8 +527,20 @@ def get_easyocr_service():
         _easyocr_service = EasyOCRService()
     return _easyocr_service
 
+def get_gutenocr_service():
+    global _gutenocr_service
+    if _gutenocr_service is None:
+        _gutenocr_service = GutenOCRService()
+    return _gutenocr_service
+
+def get_mistral_service():
+    global _mistral_service
+    if _mistral_service is None:
+        _mistral_service = MistralOCRService()
+    return _mistral_service
+
 # Default engine for fallback
-DEFAULT_ENGINE = "paddleocr"
+DEFAULT_ENGINE = "gutenocr"
 
 @app.function(image=paddleocr_image, volumes={"/root/.paddleocr": model_cache}, cpu=2, memory=4096)
 @modal.web_endpoint(method="POST", docs=True)
@@ -338,9 +580,11 @@ async def process_ocr(request: dict) -> dict:
     # Select engine with fallback
     engine = request.get("engine", DEFAULT_ENGINE)
     with_layout = request.get("with_layout", True)
+    output_format = request.get("output_format", "TEXT")
+    extract_tables = request.get("extract_tables", False)
 
     # OCR-02: Fallback to default engine if unknown engine specified
-    valid_engines = ["paddleocr", "surya", "easyocr"]
+    valid_engines = ["paddleocr", "surya", "easyocr", "gutenocr", "gutenocr-3b", "gutenocr-7b", "mistral", "mistral_ocr"]
     if engine not in valid_engines:
         print(f"Unknown engine '{engine}', falling back to {DEFAULT_ENGINE}")
         engine = DEFAULT_ENGINE
@@ -355,10 +599,16 @@ async def process_ocr(request: dict) -> dict:
         elif engine == "easyocr":
             service = get_easyocr_service()
             result = service.process.remote(image_bytes)
+        elif engine in ["gutenocr", "gutenocr-3b", "gutenocr-7b"]:
+            service = get_gutenocr_service()
+            result = service.process.remote(image_bytes, output_format)
+        elif engine in ["mistral", "mistral_ocr"]:
+            service = get_mistral_service()
+            result = service.process.remote(image_bytes, extract_tables)
         else:
             # This shouldn't happen due to fallback above, but just in case
-            service = get_paddle_service()
-            result = service.process.remote(image_bytes, with_layout)
+            service = get_gutenocr_service()
+            result = service.process.remote(image_bytes, output_format)
 
         return {"success": True, **result}
 
@@ -382,9 +632,9 @@ async def health() -> dict:
     return {
         "status": "healthy",
         "service": "scanfactory-ocr",
-        "version": "2.0.0",
-        "engines": ["paddleocr", "surya", "easyocr"],
-        "note": "Multi-OCR service with engine selection",
+        "version": "3.0.0",
+        "engines": ["gutenocr-3b", "gutenocr-7b", "mistral_ocr", "paddleocr", "surya", "easyocr"],
+        "note": "Multi-OCR service with VLM and API engines",
     }
 
 
@@ -395,28 +645,61 @@ async def list_engines() -> dict:
     return {
         "engines": [
             {
+                "id": "gutenocr-3b",
+                "name": "GutenOCR 3B",
+                "description": "VLM-based OCR (Qwen2.5-VL), fast and efficient",
+                "type": "vlm",
+                "languages": ["fr", "en", "de", "es", "100+ langues"],
+                "gpu_required": False,
+                "cost_per_page": 0,
+            },
+            {
+                "id": "gutenocr-7b",
+                "name": "GutenOCR 7B",
+                "description": "VLM-based OCR (Qwen2.5-VL), high accuracy for complex documents",
+                "type": "vlm",
+                "languages": ["fr", "en", "de", "es", "100+ langues"],
+                "gpu_required": True,
+                "cost_per_page": 0,
+            },
+            {
+                "id": "mistral_ocr",
+                "name": "Mistral OCR",
+                "description": "API-based OCR by Mistral AI, excellent for structured data",
+                "type": "api",
+                "languages": ["fr", "en", "de", "es", "100+ langues"],
+                "gpu_required": False,
+                "cost_per_page": 0.002,
+            },
+            {
                 "id": "paddleocr",
                 "name": "PaddleOCR",
                 "description": "High-accuracy OCR with layout detection",
+                "type": "traditional",
                 "languages": ["fr", "en", "zh", "ar"],
                 "gpu_required": False,
+                "cost_per_page": 0,
             },
             {
                 "id": "surya",
                 "name": "SuryaOCR",
                 "description": "Advanced document understanding with Docling",
+                "type": "vlm",
                 "languages": ["fr", "en"],
                 "gpu_required": True,
+                "cost_per_page": 0,
             },
             {
                 "id": "easyocr",
                 "name": "EasyOCR",
                 "description": "Ready-to-use OCR for images",
+                "type": "traditional",
                 "languages": ["fr", "en"],
                 "gpu_required": False,
+                "cost_per_page": 0,
             },
         ],
-        "default": "paddleocr",
+        "default": "gutenocr-3b",
     }
 
 
@@ -427,13 +710,21 @@ async def list_engines() -> dict:
 @app.local_entrypoint()
 def main():
     """Point d'entrée pour tests locaux."""
-    print("ScanFactory Multi-OCR Service v2.0")
-    print("=" * 50)
+    print("ScanFactory Multi-OCR Service v3.0")
+    print("=" * 60)
     print("\nEngines disponibles:")
-    print("  - paddleocr : PaddleOCR (défaut)")
-    print("  - surya     : SuryaOCR + Docling (GPU)")
-    print("  - easyocr   : EasyOCR")
+    print("  VLM (Vision Language Models):")
+    print("    - gutenocr-3b  : GutenOCR 3B (défaut, CPU/GPU)")
+    print("    - gutenocr-7b  : GutenOCR 7B (haute précision, GPU)")
+    print("    - surya        : SuryaOCR + Docling (GPU)")
+    print("  API:")
+    print("    - mistral_ocr  : Mistral OCR API ($0.002/page)")
+    print("  Traditional:")
+    print("    - paddleocr    : PaddleOCR (layout detection)")
+    print("    - easyocr      : EasyOCR (simple)")
     print("\nEndpoints:")
     print("  - POST /process_ocr  - OCR avec sélection moteur")
     print("  - GET  /health       - Health check")
     print("  - GET  /list_engines - Liste des moteurs")
+    print("\nStandalone API:")
+    print("  python api.py --host 0.0.0.0 --port 8000")

@@ -195,32 +195,96 @@ docker-compose --profile gateway up -d
 docker-compose logs -f scanfactory-gutenocr
 ```
 
-### API REST (via Docker)
+### API REST (Standalone)
+
+L'API REST standalone permet de consommer le service OCR depuis d'autres applications.
+
+```bash
+# Démarrer l'API
+python api.py --host 0.0.0.0 --port 8000
+
+# Ou via Docker
+docker-compose --profile api up -d
+```
+
+**Endpoints disponibles:**
+
+| Endpoint | Méthode | Description |
+|----------|---------|-------------|
+| `/health` | GET | Health check |
+| `/api/v1/ocr/engines` | GET | Liste des moteurs disponibles |
+| `/api/v1/ocr/process` | POST | Traiter un document (multipart) |
+| `/api/v1/ocr/process/json` | POST | Traiter un document (JSON/base64) |
+| `/api/v1/ocr/compare` | POST | Comparer plusieurs moteurs |
+| `/api/v1/ocr/cost-estimate` | GET | Estimer le coût (Mistral) |
+| `/docs` | GET | Documentation OpenAPI (Swagger) |
+| `/redoc` | GET | Documentation OpenAPI (ReDoc) |
+
+**Exemples d'utilisation:**
 
 ```bash
 # Health check
-curl http://localhost:8001/health
+curl http://localhost:8000/health
 
 # Liste des moteurs
 curl http://localhost:8000/api/v1/ocr/engines
 
-# Traitement GutenOCR
-curl -X POST http://localhost:8001/api/v1/ocr/process \
+# Traitement avec upload de fichier
+curl -X POST http://localhost:8000/api/v1/ocr/process \
+  -H "X-API-Key: your_api_key" \
   -F "file=@document.pdf" \
-  -F "output_format=TEXT"
+  -F "engine=auto" \
+  -F "output_format=text"
 
-# Traitement Mistral OCR
-curl -X POST http://localhost:8003/api/v1/ocr/process \
-  -F "file=@invoice.pdf" \
-  -F "extract_tables=true"
+# Traitement avec image en base64
+curl -X POST http://localhost:8000/api/v1/ocr/process/json \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_api_key" \
+  -d '{
+    "image_base64": "iVBORw0KGgo...",
+    "engine": "gutenocr-3b",
+    "output_format": "text"
+  }'
+
+# Traitement avec URL
+curl -X POST http://localhost:8000/api/v1/ocr/process/json \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://example.com/document.png",
+    "engine": "mistral_ocr"
+  }'
 
 # Comparaison de moteurs
 curl -X POST http://localhost:8000/api/v1/ocr/compare \
-  -H "Content-Type: application/json" \
-  -d '{
-    "document_url": "https://example.com/doc.pdf",
-    "engines": ["gutenocr-3b", "mistral_ocr"]
-  }'
+  -F "file=@document.pdf" \
+  -F "engines=gutenocr-3b,mistral_ocr,paddleocr"
+```
+
+**Authentification:**
+
+```bash
+# Configurer la clé API (optionnel)
+export OCR_API_KEY=your_secure_api_key
+
+# Utiliser la clé dans les requêtes
+curl -H "X-API-Key: your_secure_api_key" http://localhost:8000/api/v1/ocr/engines
+```
+
+**Réponse type:**
+
+```json
+{
+  "success": true,
+  "text": "Texte extrait du document...",
+  "confidence": 0.95,
+  "blocks": [
+    {"text": "Ligne 1", "confidence": 0.98, "type": "line"},
+    {"text": "Ligne 2", "confidence": 0.94, "type": "line"}
+  ],
+  "engine": "gutenocr-3b",
+  "processing_time_ms": 1250,
+  "metadata": {"source": "document.pdf", "model": "rootsautomation/GutenOCR-3B"}
+}
 ```
 
 ## Configuration avancée

@@ -1,0 +1,109 @@
+# ScanFactory OCR API Service
+# Unified REST API supporting all OCR engines
+#
+# Build:
+#   docker build -f docker/Dockerfile.api -t scanfactory-ocr-api:latest .
+#
+# Run:
+#   docker run -p 8000:8000 -e OCR_API_KEY=your_key scanfactory-ocr-api:latest
+
+ARG PYTHON_VERSION=3.11
+
+# Base stage
+FROM python:${PYTHON_VERSION}-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/models \
+    TRANSFORMERS_CACHE=/app/models
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    tesseract-ocr \
+    tesseract-ocr-fra \
+    tesseract-ocr-eng \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies stage
+FROM base AS dependencies
+
+# Copy requirements
+COPY requirements/ ./requirements/
+
+# Install dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements/base.txt
+
+# Optional: Install additional engines
+ARG INSTALL_GUTENOCR=false
+ARG INSTALL_MISTRAL=true
+ARG INSTALL_PADDLEOCR=false
+ARG INSTALL_SURYA=false
+
+RUN if [ "$INSTALL_GUTENOCR" = "true" ]; then \
+        pip install -r requirements/gutenocr.txt; \
+    fi
+
+RUN if [ "$INSTALL_MISTRAL" = "true" ]; then \
+        pip install -r requirements/mistral_ocr.txt; \
+    fi
+
+RUN if [ "$INSTALL_PADDLEOCR" = "true" ]; then \
+        pip install paddlepaddle==2.5.2 paddleocr==2.7.3 opencv-python-headless; \
+    fi
+
+RUN if [ "$INSTALL_SURYA" = "true" ]; then \
+        pip install -r requirements/surya.txt; \
+    fi
+
+# Runtime stage
+FROM base AS runtime
+
+# Copy installed packages
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin /usr/local/bin
+
+WORKDIR /app
+
+# Copy application code
+COPY core/ ./core/
+COPY engines/ ./engines/
+COPY config/ ./config/
+COPY api.py ./
+
+# Create directories
+RUN mkdir -p /app/models /app/input /app/output /app/logs
+
+# Volume mounts
+VOLUME ["/app/models", "/app/input", "/app/output"]
+
+# Environment variables
+ENV OCR_DEFAULT_ENGINE=auto \
+    OCR_API_KEY="" \
+    LOG_LEVEL=INFO
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose API port
+EXPOSE 8000
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Run API server
+ENTRYPOINT ["python", "api.py"]
+CMD ["--host", "0.0.0.0", "--port", "8000"]
