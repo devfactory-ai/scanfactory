@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validatePagination,
   validateNumericRange,
-  validateFileUpload,
+  validateFileUploadSync,
   validateUUID,
   validateStringArray,
   safeJsonParse,
@@ -83,17 +83,17 @@ describe('validation', () => {
     });
   });
 
-  describe('validateFileUpload', () => {
+  describe('validateFileUploadSync', () => {
     it('should throw for null file', () => {
-      expect(() => validateFileUpload(null)).toThrow(ValidationError);
+      expect(() => validateFileUploadSync(null)).toThrow(ValidationError);
     });
 
     it('should throw for undefined file', () => {
-      expect(() => validateFileUpload(undefined)).toThrow(ValidationError);
+      expect(() => validateFileUploadSync(undefined)).toThrow(ValidationError);
     });
 
     it('should throw for string file', () => {
-      expect(() => validateFileUpload('string')).toThrow(ValidationError);
+      expect(() => validateFileUploadSync('string')).toThrow(ValidationError);
     });
 
     it('should throw for file exceeding size limit', () => {
@@ -101,8 +101,8 @@ describe('validation', () => {
         size: LIMITS.UPLOAD_SIZE_MAX + 1,
         type: 'image/jpeg',
       };
-      expect(() => validateFileUpload(largeFile)).toThrow(ValidationError);
-      expect(() => validateFileUpload(largeFile)).toThrow(/trop volumineux/);
+      expect(() => validateFileUploadSync(largeFile)).toThrow(ValidationError);
+      expect(() => validateFileUploadSync(largeFile)).toThrow(/trop volumineux/);
     });
 
     it('should throw for unsupported file type', () => {
@@ -110,8 +110,8 @@ describe('validation', () => {
         size: 1000,
         type: 'application/x-executable',
       };
-      expect(() => validateFileUpload(invalidFile)).toThrow(ValidationError);
-      expect(() => validateFileUpload(invalidFile)).toThrow(/non supporté/);
+      expect(() => validateFileUploadSync(invalidFile)).toThrow(ValidationError);
+      expect(() => validateFileUploadSync(invalidFile)).toThrow(/non supporté/);
     });
 
     it('should accept valid image files', () => {
@@ -120,15 +120,15 @@ describe('validation', () => {
       const webpFile = { size: 1000, type: 'image/webp' };
       const pdfFile = { size: 1000, type: 'application/pdf' };
 
-      expect(() => validateFileUpload(jpegFile)).not.toThrow();
-      expect(() => validateFileUpload(pngFile)).not.toThrow();
-      expect(() => validateFileUpload(webpFile)).not.toThrow();
-      expect(() => validateFileUpload(pdfFile)).not.toThrow();
+      expect(() => validateFileUploadSync(jpegFile)).not.toThrow();
+      expect(() => validateFileUploadSync(pngFile)).not.toThrow();
+      expect(() => validateFileUploadSync(webpFile)).not.toThrow();
+      expect(() => validateFileUploadSync(pdfFile)).not.toThrow();
     });
 
     it('should accept file without type (empty type)', () => {
       const noTypeFile = { size: 1000, type: '' };
-      expect(() => validateFileUpload(noTypeFile)).not.toThrow();
+      expect(() => validateFileUploadSync(noTypeFile)).not.toThrow();
     });
   });
 
