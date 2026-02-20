@@ -1,0 +1,5 @@
+# Mistral OCR API dependencies
+mistralai>=1.0.0
+httpx>=0.26.0
+# Alternative HTTP client
+requests>=2.31.0

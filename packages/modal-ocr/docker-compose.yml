@@ -59,3 +59,137 @@ services:
 
     profiles:
       - cpu
+
+  # GutenOCR Service (VLM-based)
+  scanfactory-gutenocr:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gutenocr
+
+    image: scanfactory-gutenocr:latest
+    container_name: scanfactory-gutenocr
+
+    # GPU support (NVIDIA)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - gutenocr-models:/app/models  # Persistent model cache
+
+    environment:
+      - GUTENOCR_MODEL=${GUTENOCR_MODEL:-rootsautomation/GutenOCR-3B}
+      - GUTENOCR_DEVICE=auto
+      - GUTENOCR_OUTPUT_FORMAT=TEXT
+      - HF_HOME=/app/models
+      - TRANSFORMERS_CACHE=/app/models
+
+    ports:
+      - "8001:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # VLM models take time to load
+
+    profiles:
+      - gutenocr
+
+  # GutenOCR Service (CPU-only, 3B model)
+  scanfactory-gutenocr-cpu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gutenocr
+
+    image: scanfactory-gutenocr:cpu
+    container_name: scanfactory-gutenocr-cpu
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - gutenocr-models:/app/models
+
+    environment:
+      - GUTENOCR_MODEL=rootsautomation/GutenOCR-3B
+      - GUTENOCR_DEVICE=cpu
+      - GUTENOCR_OUTPUT_FORMAT=TEXT
+      - HF_HOME=/app/models
+
+    ports:
+      - "8002:8000"
+
+    profiles:
+      - gutenocr-cpu
+
+  # Mistral OCR Service (API-based)
+  scanfactory-mistral:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mistral
+
+    image: scanfactory-mistral:latest
+    container_name: scanfactory-mistral
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+
+    environment:
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - MISTRAL_MODEL=mistral-ocr-2512
+      - MISTRAL_TIMEOUT=60
+      - MISTRAL_RETRY_ATTEMPTS=3
+
+    ports:
+      - "8003:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    profiles:
+      - mistral
+
+  # Gateway service for engine selection
+  scanfactory-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: scanfactory-gateway:latest
+    container_name: scanfactory-gateway
+
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./config:/app/config
+
+    environment:
+      - OCR_DEFAULT_ENGINE=auto
+      - GUTENOCR_URL=http://scanfactory-gutenocr:8000
+      - MISTRAL_URL=http://scanfactory-mistral:8000
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+
+    ports:
+      - "8000:8000"
+
+    depends_on:
+      - scanfactory-gutenocr
+      - scanfactory-mistral
+
+    profiles:
+      - gateway
+
+volumes:
+  gutenocr-models:
+    name: scanfactory-gutenocr-models

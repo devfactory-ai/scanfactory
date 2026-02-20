@@ -36,3 +36,15 @@ def get_easyocr_engine():
     from .easyocr_engine import EasyOCREngine
 
     return EasyOCREngine
+
+
+def get_gutenocr_engine():
+    from .gutenocr_engine import GutenOCREngine
+
+    return GutenOCREngine
+
+
+def get_mistral_ocr_engine():
+    from .mistral_ocr_engine import MistralOCREngine
+
+    return MistralOCREngine

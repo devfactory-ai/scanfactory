@@ -1,0 +1,90 @@
+# ScanFactory Mistral OCR Service
+# API-based OCR using Mistral AI's OCR API
+# Lightweight container - no GPU required
+
+ARG PYTHON_VERSION=3.11
+
+FROM python:${PYTHON_VERSION}-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Multi-stage: Dependencies
+FROM base AS dependencies
+
+COPY requirements/base.txt ./requirements/
+COPY requirements/mistral_ocr.txt ./requirements/
+
+RUN pip install --upgrade pip && \
+    pip install -r requirements/base.txt && \
+    pip install -r requirements/mistral_ocr.txt
+
+# Multi-stage: Runtime
+FROM base AS runtime
+
+# Copy installed packages
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin /usr/local/bin
+
+WORKDIR /app
+
+# Copy only necessary application code
+COPY core/ ./core/
+COPY engines/base_engine.py ./engines/
+COPY engines/mistral_ocr_engine.py ./engines/
+COPY engines/__init__.py ./engines/
+COPY config/ ./config/
+COPY main.py app.py ./
+
+# Create directories
+RUN mkdir -p /app/input /app/output /app/logs
+
+# Volume mounts
+VOLUME ["/app/input", "/app/output"]
+
+# Environment variables (API key should be provided at runtime)
+ENV MISTRAL_MODEL=mistral-ocr-2512 \
+    MISTRAL_TIMEOUT=60 \
+    MISTRAL_RETRY_ATTEMPTS=3
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "from engines.mistral_ocr_engine import MistralOCREngine; print('OK')" || exit 1
+
+# Expose API port
+EXPOSE 8000
+
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Default command - API server mode
+ENTRYPOINT ["python", "app.py"]
+CMD ["--host", "0.0.0.0", "--port", "8000"]
+
+# =============================================================================
+# Build instructions:
+#
+#   docker build -f docker/Dockerfile.mistral -t scanfactory-mistral:latest .
+#
+# Run (API key required):
+#   docker run -e MISTRAL_API_KEY=your_key \
+#     -v ./input:/app/input -v ./output:/app/output \
+#     -p 8000:8000 scanfactory-mistral:latest
+#
+# For development with .env file:
+#   docker run --env-file .env \
+#     -v ./input:/app/input -v ./output:/app/output \
+#     -p 8000:8000 scanfactory-mistral:latest
+# =============================================================================

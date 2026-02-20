@@ -1,16 +1,19 @@
 # ScanFactory Multi-OCR Service
 
-Service de traitement OCR multi-moteurs pour documents médicaux, déployé sur [Modal](https://modal.com).
+Service de traitement OCR multi-moteurs pour documents, déployé sur [Modal](https://modal.com) ou Docker.
 
 ## Moteurs OCR disponibles
 
-| Moteur | Description | GPU | Langues |
-|--------|-------------|-----|---------|
-| **PaddleOCR** | OCR haute précision | Non | 90+ |
-| **SuryaOCR** | Document understanding avec Docling | Oui | 90+ |
-| **HunyuanOCR** | VLM 1B paramètres (state-of-the-art) | Oui | 90+ |
-| **EasyOCR** | OCR simple et rapide | Non | 80+ |
-| **Tesseract** | OCR classique | Non | 100+ |
+| Moteur | Type | Description | GPU | Langues | Coût |
+|--------|------|-------------|-----|---------|------|
+| **GutenOCR 3B** | VLM | Qwen2.5-VL, rapide | Opt. | 100+ | Gratuit |
+| **GutenOCR 7B** | VLM | Qwen2.5-VL, haute précision | Rec. | 100+ | Gratuit |
+| **Mistral OCR** | API | API Mistral AI, données structurées | Non | 100+ | $2/1000 pages |
+| **SuryaOCR** | VLM | Document understanding | Rec. | 90+ | Gratuit |
+| **HunyuanOCR** | VLM | Tencent VLM 1B | Oui | 90+ | Gratuit |
+| **PaddleOCR** | Trad. | OCR haute précision | Opt. | 90+ | Gratuit |
+| **EasyOCR** | Trad. | OCR simple et rapide | Opt. | 80+ | Gratuit |
+| **Tesseract** | Trad. | OCR classique | Non | 100+ | Gratuit |
 
 ## Architecture
 
@@ -20,24 +23,23 @@ Service de traitement OCR multi-moteurs pour documents médicaux, déployé sur 
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────┐     ┌───────────────────────────────────────────────────────┐ │
-│  │  Image  │────▶│                OCR Engine Factory                     │ │
+│  │  Image  │────▶│           OCR Engine Factory (auto-select)            │ │
 │  │  (scan) │     └───────────────────────┬───────────────────────────────┘ │
 │  └─────────┘                             │                                  │
-│                      ┌───────────────────┼───────────────────┐             │
-│                      │                   │                   │             │
-│                      ▼                   ▼                   ▼             │
-│               ┌──────────┐        ┌──────────┐        ┌──────────┐        │
-│               │PaddleOCR │        │ SuryaOCR │        │ EasyOCR  │        │
-│               │  (CPU)   │        │  (GPU)   │        │  (CPU)   │        │
-│               └──────────┘        └──────────┘        └──────────┘        │
-│                      │                   │                   │             │
-│                      └───────────────────┼───────────────────┘             │
+│           ┌──────────────┬───────────────┼───────────────┬──────────────┐  │
+│           │              │               │               │              │  │
+│           ▼              ▼               ▼               ▼              ▼  │
+│    ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌─────────┐│
+│    │ GutenOCR │   │ Mistral  │   │ SuryaOCR │   │PaddleOCR │   │Tesseract││
+│    │  (VLM)   │   │  (API)   │   │  (VLM)   │   │ (Trad.)  │   │ (Trad.) ││
+│    └──────────┘   └──────────┘   └──────────┘   └──────────┘   └─────────┘│
+│           │              │               │               │              │  │
+│           └──────────────┴───────────────┼───────────────┴──────────────┘  │
 │                                          │                                  │
 │                                          ▼                                  │
 │                              ┌──────────────────────┐                      │
-│                              │  Cloudflare Workers  │                      │
-│                              │    AI (Extraction)   │                      │
-│                              │      (GRATUIT)       │                      │
+│                              │   OCRResult (JSON)   │                      │
+│                              │   + Structured Data  │                      │
 │                              └──────────────────────┘                      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -47,8 +49,9 @@ Service de traitement OCR multi-moteurs pour documents médicaux, déployé sur 
 
 ### Prérequis
 
-- Python 3.10+
-- Compte [Modal](https://modal.com)
+- Python 3.10+ (3.11 recommandé)
+- Compte [Modal](https://modal.com) (optionnel)
+- Clé API Mistral (pour Mistral OCR)
 
 ### Installation locale
 
@@ -57,18 +60,42 @@ cd packages/modal-ocr
 
 # Créer un environnement virtuel
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # Linux/Mac
+# ou: venv\Scripts\activate  # Windows
 
 # Installer les dépendances de base
 pip install -r requirements/base.txt
 
 # Installer les moteurs OCR souhaités
-pip install -r requirements/paddleocr.txt
-pip install -r requirements/surya.txt
-pip install -r requirements/easyocr.txt
+pip install -r requirements/gutenocr.txt    # GutenOCR (VLM)
+pip install -r requirements/mistral_ocr.txt # Mistral OCR (API)
+pip install -r requirements/surya.txt       # SuryaOCR
+pip install -r requirements/paddleocr.txt   # PaddleOCR
 
-# Support GPU (optionnel)
+# Tous les moteurs
+pip install -r requirements/all.txt
+
+# Support GPU (optionnel mais recommandé pour VLM)
 pip install -r requirements/gpu.txt
+```
+
+### Configuration
+
+Copier et personnaliser le fichier d'environnement:
+
+```bash
+cp .env.example .env
+# Éditer .env avec vos paramètres
+```
+
+Variables importantes:
+```bash
+# GutenOCR
+GUTENOCR_MODEL=rootsautomation/GutenOCR-3B  # ou GutenOCR-7B
+GUTENOCR_DEVICE=auto
+
+# Mistral OCR (obligatoire pour utiliser Mistral)
+MISTRAL_API_KEY=your_api_key_here
 ```
 
 ## Utilisation
@@ -76,102 +103,161 @@ pip install -r requirements/gpu.txt
 ### CLI locale
 
 ```bash
-# Document unique avec SuryaOCR
-python main.py --input ./docs/sample.pdf --engine surya --formats markdown json
+# Document unique avec GutenOCR
+python main.py --input ./docs/sample.pdf --engine gutenocr --formats markdown json
 
-# Batch processing avec PaddleOCR
-python main.py --input ./docs/ --engine paddleocr --batch
+# Document avec Mistral OCR
+python main.py --input ./docs/invoice.pdf --engine mistral_ocr
 
-# Utiliser le moteur par défaut (config)
-python main.py --input ./docs/invoice.pdf
+# Batch processing
+python main.py --input ./docs/ --engine gutenocr-3b --batch
+
+# Sélection automatique du meilleur moteur
+python main.py --input ./docs/sample.pdf --engine auto
 
 # Lister les moteurs disponibles
 python main.py --list-engines
 
-# Afficher les infos device (GPU/CPU)
-python main.py --device-info
+# Comparer les moteurs sur un document
+python main.py --input ./docs/test.pdf --compare
 ```
 
-### Déploiement Modal
+### API Python
 
-```bash
-# Installer Modal CLI
-pip install modal
+```python
+from pathlib import Path
+from core.ocr_factory import OCREngineFactory, SelectionPriority
 
-# S'authentifier
-modal token new
+# Création manuelle d'un moteur
+from engines.gutenocr_engine import GutenOCREngine
 
-# Créer le volume pour le cache
-modal volume create scanfactory-model-cache
+engine = GutenOCREngine({
+    "model_size": "3b",        # "3b" ou "7b"
+    "device": "auto",          # "auto", "cuda", "cpu", "mps"
+    "output_format": "TEXT",   # "TEXT", "LINES", "WORDS", "PARAGRAPHS", "LATEX"
+})
+engine.initialize()
+result = engine.process(Path("document.pdf"))
 
-# Déployer
-modal deploy app.py
-```
+print(result.text)
+print(f"Confidence: {result.confidence}")
 
-### API Modal
+# Mistral OCR
+from engines.mistral_ocr_engine import MistralOCREngine
 
-```bash
-# OCR avec PaddleOCR (défaut)
-curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image_url": "https://example.com/document.jpg"
-  }'
+engine = MistralOCREngine({
+    "api_key": "sk-...",  # ou via MISTRAL_API_KEY env var
+    "extract_tables": True,
+    "extract_structure": True,
+})
+result = engine.process(Path("invoice.pdf"))
 
-# OCR avec SuryaOCR
-curl -X POST https://devfactory-ai--scanfactory-ocr-process-ocr.modal.run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image_url": "https://example.com/document.jpg",
-    "engine": "surya"
-  }'
+# Extraction de données structurées
+structured = engine.extract_structured_data(Path("form.pdf"))
+print(structured["tables"])
 
-# Lister les moteurs
-curl https://devfactory-ai--scanfactory-ocr-list-engines.modal.run
+# Sélection automatique via Factory
+engine_name = OCREngineFactory.auto_select_engine(
+    priority=SelectionPriority.ACCURACY,
+    document_type="invoice",
+)
+engine = OCREngineFactory.create_engine(engine_name, {})
+result = engine.process(Path("document.pdf"))
+
+# Comparaison de moteurs
+comparison = OCREngineFactory.compare_engines(
+    "document.pdf",
+    engines=["gutenocr-3b", "mistral_ocr", "surya"]
+)
+for name, data in comparison["results"].items():
+    print(f"{name}: {data['confidence']:.2%} ({data['processing_time_ms']}ms)")
 ```
 
 ### Docker
 
 ```bash
-# Build
-docker build -t scanfactory-ocr .
+# Build tous les services
+docker-compose build
 
-# Run avec GPU
-docker run --gpus all \
-  -v $(pwd)/input:/app/input \
-  -v $(pwd)/output:/app/output \
-  scanfactory-ocr --engine surya
+# GutenOCR avec GPU
+docker-compose --profile gutenocr up -d
 
-# Run CPU only
-docker-compose --profile cpu up scanfactory-ocr-cpu
+# GutenOCR CPU uniquement (3B)
+docker-compose --profile gutenocr-cpu up -d
+
+# Mistral OCR (nécessite MISTRAL_API_KEY dans .env)
+docker-compose --profile mistral up -d
+
+# Gateway avec tous les moteurs
+docker-compose --profile gateway up -d
+
+# Voir les logs
+docker-compose logs -f scanfactory-gutenocr
 ```
 
-## Configuration
+### API REST (via Docker)
+
+```bash
+# Health check
+curl http://localhost:8001/health
+
+# Liste des moteurs
+curl http://localhost:8000/api/v1/ocr/engines
+
+# Traitement GutenOCR
+curl -X POST http://localhost:8001/api/v1/ocr/process \
+  -F "file=@document.pdf" \
+  -F "output_format=TEXT"
+
+# Traitement Mistral OCR
+curl -X POST http://localhost:8003/api/v1/ocr/process \
+  -F "file=@invoice.pdf" \
+  -F "extract_tables=true"
+
+# Comparaison de moteurs
+curl -X POST http://localhost:8000/api/v1/ocr/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "document_url": "https://example.com/doc.pdf",
+    "engines": ["gutenocr-3b", "mistral_ocr"]
+  }'
+```
+
+## Configuration avancée
 
 ### `config/ocr_config.yaml`
 
 ```yaml
 ocr:
-  default_engine: "surya"
+  default_engine: "gutenocr"
 
   engines:
-    paddleocr:
+    gutenocr:
       enabled: true
       device: "auto"
-      languages: ["fr", "en"]
+      model_size: "3b"       # "3b" (8GB RAM) ou "7b" (16GB RAM)
+      output_format: "TEXT"  # TEXT, TEXT2D, LINES, WORDS, PARAGRAPHS, LATEX
+      max_new_tokens: 4096
+      batch_size: 4
+      memory_cleanup: true
+
+    mistral_ocr:
+      enabled: true
+      model: "mistral-ocr-2512"
+      timeout: 60
+      retry_attempts: 3
+      extract_tables: true
+      extract_structure: true
 
     surya:
       enabled: true
       device: "auto"
       languages: ["en", "fr"]
-      pipeline_options:
-        do_ocr: true
 
-    hunyuan:
+    paddleocr:
       enabled: true
       device: "auto"
-      languages: ["en", "fr", "zh"]
-      tasks: ["detection", "parsing", "layout"]
+      languages: ["fr", "en"]
 
   output:
     formats: ["markdown", "json"]
@@ -181,65 +267,77 @@ ocr:
 
 ```
 packages/modal-ocr/
-├── app.py                  # Modal application
-├── main.py                 # CLI entry point
+├── app.py                    # Modal application
+├── main.py                   # CLI entry point
+├── .env.example              # Variables d'environnement
 ├── config/
-│   ├── ocr_config.yaml     # Configuration
-│   └── settings.py         # Config loader
+│   └── ocr_config.yaml       # Configuration des moteurs
 ├── core/
-│   ├── ocr_strategy.py     # Strategy interface
-│   ├── ocr_factory.py      # Engine factory
-│   └── document_processor.py
+│   ├── ocr_strategy.py       # Interface abstraite OCRStrategy
+│   ├── ocr_factory.py        # Factory + auto-selection
+│   └── document_processor.py # Processeur de documents
 ├── engines/
-│   ├── base_engine.py      # Base class
-│   ├── paddleocr_engine.py
-│   ├── surya_engine.py
-│   ├── hunyuan_engine.py
-│   ├── tesseract_engine.py
-│   └── easyocr_engine.py
-├── utils/
-│   ├── hardware_detector.py
-│   ├── format_converter.py
-│   └── logger.py
+│   ├── base_engine.py        # Classe de base
+│   ├── gutenocr_engine.py    # ✨ GutenOCR (VLM)
+│   ├── mistral_ocr_engine.py # ✨ Mistral OCR (API)
+│   ├── surya_engine.py       # SuryaOCR
+│   ├── hunyuan_engine.py     # HunyuanOCR
+│   ├── paddleocr_engine.py   # PaddleOCR
+│   ├── tesseract_engine.py   # Tesseract
+│   └── easyocr_engine.py     # EasyOCR
+├── docker/
+│   ├── Dockerfile.gutenocr   # ✨ Docker GutenOCR
+│   └── Dockerfile.mistral    # ✨ Docker Mistral OCR
 ├── tests/
+│   ├── test_gutenocr.py      # ✨ Tests GutenOCR
+│   ├── test_mistral_ocr.py   # ✨ Tests Mistral OCR
+│   ├── test_surya.py
+│   └── test_integration.py
 ├── requirements/
 │   ├── base.txt
-│   ├── paddleocr.txt
+│   ├── gutenocr.txt          # ✨ Deps GutenOCR
+│   ├── mistral_ocr.txt       # ✨ Deps Mistral OCR
 │   ├── surya.txt
-│   ├── hunyuan.txt
-│   └── gpu.txt
+│   └── all.txt
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
 ## Comparaison des moteurs
 
-| Critère | PaddleOCR | SuryaOCR | HunyuanOCR | Tesseract | EasyOCR |
-|---------|-----------|----------|------------|-----------|---------|
-| **Précision** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| **Vitesse CPU** | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| **Vitesse GPU** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | N/A | ⭐⭐⭐⭐ |
-| **Layout** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
-| **Tables** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ |
-| **Handwriting** | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
-| **Taille modèle** | ~100MB | ~500MB | ~1GB | ~10MB | ~100MB |
+| Critère | GutenOCR 3B | GutenOCR 7B | Mistral OCR | SuryaOCR | PaddleOCR | Tesseract |
+|---------|-------------|-------------|-------------|----------|-----------|-----------|
+| **Précision** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Vitesse CPU** | ⭐⭐⭐ | ⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Vitesse GPU** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | N/A | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | N/A |
+| **Layout** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
+| **Tables** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
+| **Manuscrits** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
+| **RAM requise** | 8GB | 16GB | N/A | 8GB | 4GB | 1GB |
+| **Coût** | Gratuit | Gratuit | $2/1000p | Gratuit | Gratuit | Gratuit |
 
-## Recommandations
+## Recommandations par cas d'usage
 
-- **Documents PDF/Images structurés** → SuryaOCR
-- **Production haute précision** → HunyuanOCR
-- **Batch processing rapide** → PaddleOCR
-- **Ressources limitées** → Tesseract
-- **Setup rapide** → EasyOCR
+| Cas d'usage | Moteur recommandé | Raison |
+|-------------|-------------------|--------|
+| **Documents standard** | GutenOCR 3B | Bon équilibre précision/vitesse |
+| **Documents complexes** | GutenOCR 7B | Meilleure précision VLM |
+| **Factures/Formulaires** | Mistral OCR | Extraction structurée native |
+| **Manuscrits** | GutenOCR 7B | Excellent sur écriture manuscrite |
+| **Production haute précision** | Mistral OCR | API fiable, données structurées |
+| **Batch rapide** | PaddleOCR | Optimisé pour le volume |
+| **Ressources limitées** | Tesseract | Léger, pas de GPU |
+| **Sans GPU** | GutenOCR 3B ou Mistral | 3B tourne sur CPU, Mistral est API |
 
-## Coûts
+## Coûts estimés
 
 | Service | Coût |
 |---------|------|
+| GutenOCR (local) | Gratuit (électricité/GPU) |
+| Mistral OCR (API) | ~$0.002/page ($2/1000) |
 | Modal (PaddleOCR) | ~$0.0002/sec |
 | Modal (SuryaOCR GPU) | ~$0.001/sec |
-| Workers AI (extraction) | **GRATUIT** |
-| **Total par document** | **~$0.001-0.005** |
+| **Total par document** | **$0.001-0.01** |
 
 ## Tests
 
@@ -250,6 +348,47 @@ python -m pytest tests/
 # Tests avec couverture
 python -m pytest tests/ --cov=.
 
-# Tests d'un moteur spécifique
-python -m pytest tests/test_surya.py
+# Tests GutenOCR
+python -m pytest tests/test_gutenocr.py -v
+
+# Tests Mistral OCR
+python -m pytest tests/test_mistral_ocr.py -v
+
+# Tests d'intégration
+python -m pytest tests/test_integration.py -v
 ```
+
+## Troubleshooting
+
+### GutenOCR: Out of Memory
+```bash
+# Forcer le modèle 3B et CPU
+export GUTENOCR_MODEL=rootsautomation/GutenOCR-3B
+export GUTENOCR_DEVICE=cpu
+```
+
+### Mistral OCR: API Key Invalid
+```bash
+# Vérifier la clé
+echo $MISTRAL_API_KEY
+
+# Tester l'API
+curl -H "Authorization: Bearer $MISTRAL_API_KEY" \
+  https://api.mistral.ai/v1/models
+```
+
+### Modèle ne se télécharge pas
+```bash
+# Vérifier la connexion HuggingFace
+python -c "from huggingface_hub import HfApi; HfApi().whoami()"
+
+# Télécharger manuellement
+huggingface-cli download rootsautomation/GutenOCR-3B
+```
+
+## Ressources
+
+- [GutenOCR GitHub](https://github.com/Roots-Automation/GutenOCR)
+- [Mistral OCR Docs](https://docs.mistral.ai/capabilities/vision/)
+- [HuggingFace GutenOCR Models](https://huggingface.co/rootsautomation)
+- [ScanFactory Documentation](../../docs/)

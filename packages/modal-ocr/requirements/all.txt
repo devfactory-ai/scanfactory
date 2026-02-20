@@ -4,6 +4,8 @@
 -r surya.txt
 -r tesseract.txt
 -r easyocr.txt
+-r gutenocr.txt
+-r mistral_ocr.txt
 
 # Note: HunyuanOCR requires separate installation from GitHub
 # See requirements/hunyuan.txt

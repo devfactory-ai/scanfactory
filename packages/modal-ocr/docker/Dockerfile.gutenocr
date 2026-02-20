@@ -1,0 +1,110 @@
+# ScanFactory GutenOCR Service
+# VLM-based OCR using Qwen2.5-VL architecture
+# Supports: GutenOCR-3B (CPU/GPU), GutenOCR-7B (GPU recommended)
+
+# Build arguments
+ARG CUDA_VERSION=12.1.0
+ARG PYTHON_VERSION=3.11
+
+# Multi-stage build: Base
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04 AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/models \
+    TRANSFORMERS_CACHE=/app/models
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+
+WORKDIR /app
+
+# Multi-stage build: Dependencies
+FROM base AS dependencies
+
+# Install base + GPU dependencies
+COPY requirements/base.txt ./requirements/
+COPY requirements/gpu.txt ./requirements/
+COPY requirements/gutenocr.txt ./requirements/
+
+RUN pip install --upgrade pip setuptools wheel
+
+# Install PyTorch with CUDA support
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Install GutenOCR dependencies
+RUN pip install -r requirements/base.txt && \
+    pip install -r requirements/gutenocr.txt
+
+# Multi-stage build: Runtime
+FROM base AS runtime
+
+# Copy installed packages from dependencies stage
+COPY --from=dependencies /usr/local/lib/python3.11/dist-packages /usr/local/lib/python3.11/dist-packages
+COPY --from=dependencies /usr/local/bin /usr/local/bin
+
+# Copy application code
+WORKDIR /app
+COPY core/ ./core/
+COPY engines/base_engine.py ./engines/
+COPY engines/gutenocr_engine.py ./engines/
+COPY engines/__init__.py ./engines/
+COPY config/ ./config/
+COPY main.py app.py ./
+
+# Create directories for models and data
+RUN mkdir -p /app/models /app/input /app/output /app/logs
+
+# Volume mounts
+VOLUME ["/app/models", "/app/input", "/app/output"]
+
+# Environment variables for GutenOCR
+ENV GUTENOCR_MODEL=rootsautomation/GutenOCR-3B \
+    GUTENOCR_DEVICE=auto \
+    GUTENOCR_OUTPUT_FORMAT=TEXT
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "from engines.gutenocr_engine import GutenOCREngine; print('OK')" || exit 1
+
+# Expose API port
+EXPOSE 8000
+
+# Default command - API server mode
+ENTRYPOINT ["python", "app.py"]
+CMD ["--host", "0.0.0.0", "--port", "8000"]
+
+# =============================================================================
+# Build instructions:
+#
+# For GPU (recommended for 7B model):
+#   docker build -f docker/Dockerfile.gutenocr -t scanfactory-gutenocr:gpu .
+#
+# For CPU (3B model only, use multi-stage with CPU base):
+#   docker build -f docker/Dockerfile.gutenocr \
+#     --build-arg CUDA_VERSION=cpu \
+#     -t scanfactory-gutenocr:cpu .
+#
+# Run:
+#   docker run --gpus all -v ./models:/app/models \
+#     -v ./input:/app/input -v ./output:/app/output \
+#     -p 8000:8000 scanfactory-gutenocr:gpu
+# =============================================================================
